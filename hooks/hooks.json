@@ -1,0 +1,17 @@
+{
+  "description": "Inject the project's knowledge-vault summary and usage rules at session start.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|clear|compact)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/skills/vault/bin/vault\" context --hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

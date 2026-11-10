@@ -1,0 +1,17 @@
+{
+  "name": "agent-vault",
+  "version": "0.1.0",
+  "description": "Per-project knowledge vault for coding agents: the vault skill and a session-start hook. Install the agents with `vault setup --agent codex --only agents`.",
+  "author": {
+    "name": "dmytromykhailiuk"
+  },
+  "license": "MIT",
+  "keywords": ["knowledge-base", "documentation", "obsidian", "vault"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Agent Vault",
+    "shortDescription": "Per-project knowledge vault with keeper and reviewer agents",
+    "category": "Productivity"
+  }
+}

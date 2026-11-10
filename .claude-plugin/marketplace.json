@@ -1,0 +1,19 @@
+{
+  "name": "agent-vault",
+  "owner": {
+    "name": "dmytromykhailiuk"
+  },
+  "metadata": {
+    "description": "Per-project knowledge vault for Claude Code and Codex."
+  },
+  "plugins": [
+    {
+      "name": "agent-vault",
+      "source": "./",
+      "description": "Per-project knowledge vault: a vault skill, keeper and reviewer agents, and a session-start hook.",
+      "version": "0.1.0",
+      "category": "productivity",
+      "keywords": ["knowledge-base", "documentation", "obsidian", "vault"]
+    }
+  ]
+}
