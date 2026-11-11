@@ -9,11 +9,11 @@ context stays small:
 
 | Piece | What it does |
 |---|---|
-| `vault` skill | Dispatcher: search, remember, update, lint, review, init, status, setup, doctor. |
+| `vault` skill | Dispatcher: search, remember, update, lint, review, init, status, graph, setup, doctor. |
 | `vault-keeper` agent | Runs every operation that answers or writes: search, remember, update, lint, init phases (and the optional verify-loop retro). |
 | `vault-reviewer` agent | Read-only audit: checks note claims against code, measures search hit@1/hit@3, finds coverage gaps. |
 | SessionStart hook | `vault context --hook`: injects the project's summary, sync state and the usage rules at session start. |
-| `vault` CLI | Python 3.10+, no dependencies: resolve, search, list, affected, lint, coverage, commit, tree, lessons, setup, doctor. |
+| `vault` CLI | Python 3.10+, no dependencies: resolve, search, list, affected, lint, coverage, commit, graph, tree, lessons, setup, doctor. |
 
 ## Install
 
@@ -89,6 +89,7 @@ run twice.
 | `vault lint` | Fixes broken links, missing fields, wrong code refs, orphans. |
 | `vault review [focus]` | The reviewer audits claims against code and search quality; read-only. |
 | `vault init [--dir …] [--save …] [--depth full\|lite]` | Generates the vault for a repo: planner, parallel workers, synthesizer. Expensive; only on request. |
+| `vault graph [--no-stale] [--out <file>] [--no-open]` | Writes an interactive graph of the project's notes to `<work_dir>/graph.html` and opens it: notes as nodes, wikilinks as edges, code files and lessons/retros behind toggles, stale/unverified notes marked, and a click shows the rendered note with its links, backlinks and code refs. The page loads cytoscape.js, marked and DOMPurify from cdnjs. |
 | `vault status` / `vault doctor` | Vault state / installation state. |
 
 ## Where the vault lives

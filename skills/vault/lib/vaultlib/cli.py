@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import sys
+import webbrowser
 from pathlib import Path
 
 from . import core
@@ -681,6 +682,30 @@ def cmd_tree(args) -> int:
 # --------------------------------------------------------------------------- main
 
 
+GRAPH_TEMPLATE = core.SKILL_DIR / "assets" / "graph.html"
+GRAPH_PLACEHOLDER = "/*__VAULT_DATA__*/null"
+
+
+def cmd_graph(args) -> int:
+    ctx = _ctx(args)
+    _need_project(ctx)
+    notes = core.load_notes(ctx.project_dir, ctx.vault)
+    data = core.graph_data(ctx, notes, stale=not args.no_stale)
+    payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/").replace("<!--", "\\u003c!--")
+    html = GRAPH_TEMPLATE.read_text(encoding="utf-8").replace(GRAPH_PLACEHOLDER, payload, 1)
+    out = Path(args.out).expanduser() if args.out else ctx.work_dir / "graph.html"
+    out = out.resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(html, encoding="utf-8")
+    notes_n = sum(1 for n in data["nodes"] if n["kind"] == "note")
+    code_n = len(data["nodes"]) - notes_n
+    print(f"vault: graph of {ctx.slug}: {notes_n} note(s), {code_n} code file(s), {len(data['edges'])} edge(s)")
+    print(out)
+    if not args.no_open:
+        webbrowser.open(out.as_uri())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--cwd", help="directory to resolve the project from (default: current)")
@@ -755,6 +780,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("action", choices=["accept", "reject"])
     s.add_argument("note", help="lesson note: link or path")
     s.set_defaults(fn=cmd_proposal)
+
+    s = sub.add_parser("graph", parents=[common], help="interactive HTML graph of the project's notes")
+    s.add_argument("--out", help="output file (default: <work_dir>/graph.html)")
+    s.add_argument("--no-open", action="store_true", help="don't open it in the browser")
+    s.add_argument("--no-stale", action="store_true", help="skip staleness checks")
+    s.set_defaults(fn=cmd_graph)
 
     s = sub.add_parser("tree", parents=[common], help="detached worktree of the target ref for reading code")
     s.add_argument("--remove", action="store_true")

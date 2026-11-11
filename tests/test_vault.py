@@ -779,6 +779,67 @@ class TestHarness(VaultTestCase):
         self.assertIsNone(core.harness_ctx(core.resolve(self.repo, "_harness")))
 
 
+class TestGraph(VaultTestCase):
+    def graph(self, *extra):
+        out_file = self.tmp / "out" / "graph.html"
+        from unittest import mock
+        with mock.patch.object(cli.webbrowser, "open") as opened:
+            out = self.run_cli("graph", "--no-open", "--out", str(out_file), *extra)
+        opened.assert_not_called()
+        self.assertIn(str(out_file), out.splitlines())
+        html = out_file.read_text(encoding="utf-8")
+        self.assertNotIn(cli.GRAPH_PLACEHOLDER, html)
+        start = html.index("const DATA = ") + len("const DATA = ")
+        data, _ = json.JSONDecoder().raw_decode(html[start:])
+        return html, data
+
+    def test_graph_data(self):
+        p = self.init_project()
+        write(p / "problems/bug.md", fm.render(
+            {"title": "Bug", "type": "problem", "status": "open", "summary": "A bug.",
+             "code_refs": ["src/auth/login.ts"]},
+            "\n## Summary\nSee [[demo/modules/auth]] and [[demo/modules/auth|again]] and [[demo/nope]].\n"
+            "`[[demo/in-code]]`\n</script><script>alert(1)</script>\n"))
+        self.run_cli("commit", "-m", "init", "--stamp-all", "--synced")
+        html, data = self.graph()
+        self.assertNotIn("</script><script>alert(1)", html)
+        notes = {n["id"]: n for n in data["nodes"] if n["kind"] == "note"}
+        self.assertIn("demo/index", notes)
+        self.assertFalse(any(n["type"] in ("hub", "log") for n in notes.values()))
+        self.assertIn("</script>", notes["demo/problems/bug"]["body"])
+        self.assertEqual(notes["demo/problems/bug"]["broken_links"], ["demo/nope"])
+        links = [(e["source"], e["target"]) for e in data["edges"] if e["kind"] == "link"]
+        self.assertEqual(links.count(("demo/problems/bug", "demo/modules/auth")), 1)
+        self.assertIn(("demo/features/login", "demo/modules/auth"), links)
+        code = {n["id"]: n for n in data["nodes"] if n["kind"] == "code"}
+        self.assertEqual(set(code), {"code:src/auth/login.ts", "code:src/scan/scan.ts"})
+        refs = {(e["source"], e["target"]) for e in data["edges"] if e["kind"] == "ref"}
+        self.assertIn(("demo/problems/bug", "code:src/auth/login.ts"), refs)
+        self.assertEqual(notes["demo/modules/auth"]["state"], "ok")
+        self.assertTrue(data["meta"]["stale_checked"])
+
+        write(self.repo / "src/auth/login.ts", "export class AuthService {}\nexport function refreshToken() {}\n// x\n")
+        self.commit("change auth")
+        _, data = self.graph()
+        notes = {n["id"]: n for n in data["nodes"] if n["kind"] == "note"}
+        self.assertEqual(notes["demo/modules/auth"]["state"], "stale")
+        self.assertEqual(notes["demo/modules/auth"]["changed"], ["src/auth/login.ts"])
+        self.assertEqual(notes["demo/guides/add-scan-step"]["state"], "ok")
+
+        _, data = self.graph("--no-stale")
+        self.assertFalse(data["meta"]["stale_checked"])
+        self.assertTrue(all("state" not in n for n in data["nodes"]))
+
+    def test_graph_default_path_and_no_vault(self):
+        out = self.run_cli("graph", "--no-open", expect=None)
+        self.assertNotIn("graph.html", out)
+        self.init_project()
+        out = self.run_cli("graph", "--no-open")
+        path = Path(out.splitlines()[-1])
+        self.assertEqual(path, (self.vault / ".work" / "demo" / "graph.html").resolve())
+        self.assertTrue(path.is_file())
+
+
 class TestLock(unittest.TestCase):
     def test_stale_lock_is_reclaimed(self):
         tmp = Path(tempfile.mkdtemp())

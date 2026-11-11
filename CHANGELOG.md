@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `vault graph`: an interactive HTML graph of the project's notes (links, code files, staleness) with a
+  detail panel that renders the clicked note.
+
 ## 0.1.0
 
 - First release: the `vault` skill (Python CLI, operations, schema), the `vault-keeper` and `vault-reviewer` agents,

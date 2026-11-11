@@ -1,7 +1,7 @@
 ---
 name: vault
-description: Per-project knowledge vault (Obsidian-style markdown in a configurable vault dir) covering the project overview, features, how-to guides, known problems, decisions, and module internals with code links. Every vault operation runs in a separate vault-keeper agent (reviews in a read-only vault-reviewer agent); this skill only dispatches. Use it to answer "how does X work / where is Y" before exploring code (vault search), to record durable knowledge such as decisions, gotchas, bug causes, how-tos and flows (vault remember), to sync the docs after code changes (vault update), to run a health check (vault lint), to audit the notes against the code (vault review), to show status (vault status), to install or check the agents and hook (vault setup, vault doctor), or to generate docs for a repo (vault init, only on explicit request). Triggers include "how does … work in this project", "remember this", "write it down in the docs", "update the docs", "document the project", "що ми знаємо про…", "як працює … в проекті", "запам'ятай це", "онови доку", "задокументуй проект", "vault", "project knowledge base".
-argument-hint: "<search|remember|update|lint|review|status|init|setup|doctor> [args]"
+description: Per-project knowledge vault (Obsidian-style markdown in a configurable vault dir) covering the project overview, features, how-to guides, known problems, decisions, and module internals with code links. Every vault operation runs in a separate vault-keeper agent (reviews in a read-only vault-reviewer agent); this skill only dispatches. Use it to answer "how does X work / where is Y" before exploring code (vault search), to record durable knowledge such as decisions, gotchas, bug causes, how-tos and flows (vault remember), to sync the docs after code changes (vault update), to run a health check (vault lint), to audit the notes against the code (vault review), to show status (vault status), to open an interactive graph of the notes in the browser (vault graph), to install or check the agents and hook (vault setup, vault doctor), or to generate docs for a repo (vault init, only on explicit request). Triggers include "how does … work in this project", "remember this", "write it down in the docs", "update the docs", "document the project", "що ми знаємо про…", "як працює … в проекті", "запам'ятай це", "онови доку", "задокументуй проект", "vault", "project knowledge base".
+argument-hint: "<search|remember|update|lint|review|status|graph|init|setup|doctor> [args]"
 allowed-tools: Bash(${CLAUDE_SKILL_DIR}/bin/vault *)
 ---
 
@@ -10,8 +10,8 @@ allowed-tools: Bash(${CLAUDE_SKILL_DIR}/bin/vault *)
 The knowledge vault is the `vault_dir` that `$V resolve` prints (see "Location"). **Every interaction with it runs in
 a separate agent**: `vault-keeper` for every operation that writes or answers, `vault-reviewer` for the read-only
 review. In this session you **never** Read, Grep, Glob or Edit files under the vault dir. You only dispatch the
-operation and relay the agent's answer. The exceptions are `status`, `doctor`, `setup`, `lessons`, `covering` and
-`proposal` (scripts that print metadata or that the user runs on purpose).
+operation and relay the agent's answer. The exceptions are `status`, `doctor`, `setup`, `graph`, `lessons`, `covering`
+and `proposal` (scripts that print metadata or that the user runs on purpose).
 
 **Paths.** `<skill_dir>` is the folder that holds this `SKILL.md` (Claude Code: `${CLAUDE_SKILL_DIR}`; in Codex, the
 path the skill was loaded from). `$V` is `<skill_dir>/bin/vault` as an absolute path; it needs `python3` ≥ 3.10.
@@ -23,6 +23,7 @@ path the skill was loaded from). `$V` is `<skill_dir>/bin/vault` as an absolute 
 |---|---|---|---|---|
 | `vault status` | Run `$V status` and show the output. | none | n/a | n/a |
 | `vault doctor` | Run `$V doctor` and show the output. | none | n/a | n/a |
+| `vault graph [--no-stale]` | Run `$V graph`: it writes an interactive HTML graph of the notes (links, code files, staleness) and opens it in the browser. Print the path it prints, on its own line. | none | n/a | n/a |
 | `vault setup [args]` | Run `$V setup --dry-run [args]`, show it, and only after the user agrees run it without `--dry-run`. | none | n/a | n/a |
 | `vault search <question>` | Dispatch `search` | vault-keeper | sonnet | foreground |
 | `vault remember [text]` | Write a knowledge brief, dispatch `remember` | vault-keeper | sonnet | foreground |
@@ -37,7 +38,8 @@ Invocation: `/vault <op>` in Claude Code, `$vault <op>` in Codex, or plain words
 - "remember / write it down / запам'ятай" → remember;
 - "update the docs / онови доку" → update;
 - "check the docs against the code" → review;
-- "document the project / задокументуй проект" → init.
+- "document the project / задокументуй проект" → init;
+- "show the docs graph / покажи граф документації" → graph.
 
 Only init when the user explicitly asks; it is expensive.
 

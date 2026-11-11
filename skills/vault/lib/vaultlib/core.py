@@ -1124,6 +1124,64 @@ def _lint_lesson(n: Note, add) -> None:
             add("warn", n, f"stale lesson: last seen {last[:10]}; retire or confirm")
 
 
+# --------------------------------------------------------------------------- graph
+
+
+def graph_data(ctx: Ctx, notes: list, stale: bool = True) -> dict:
+    """Nodes (notes and code files) and edges (wikilinks, code_refs) for `vault graph`."""
+    shown = [n for n in notes if n.type not in ("hub", "log")]
+    basenames: dict = {}
+    for n in notes:
+        basenames.setdefault(n.name, []).append(n.rel)
+    by_rel = {n.rel: n for n in shown}
+    st = Staleness(ctx) if stale else None
+    check = bool(st and st.available)
+    nodes, edges, code_nodes, seen = [], [], {}, set()
+    for n in shown:
+        broken = []
+        for target in wikilinks(n.body):
+            rel, _ = resolve_link(ctx.vault, target, basenames)
+            if rel is None:
+                if target not in broken:
+                    broken.append(target)
+                continue
+            other = by_rel.get(rel)
+            if other is None or other.rel == n.rel or (n.link, other.link) in seen:
+                continue
+            seen.add((n.link, other.link))
+            edges.append({"source": n.link, "target": other.link, "kind": "link"})
+        node = {
+            "id": n.link, "kind": "note", "rel": n.rel, "type": n.type, "status": n.status, "title": n.title,
+            "summary": n.summary, "aliases": n.aliases, "code_refs": n.code_refs, "verified": n.verified,
+            "tokens": n.tokens, "body": n.body, "broken_links": broken,
+        }
+        if check:
+            s = st.state(n)
+            node["state"] = s["state"]
+            node["changed"] = s.get("changed", [])
+            node["missing"] = st.missing_refs(n)
+        nodes.append(node)
+        for ref in dict.fromkeys(n.code_refs):
+            cid = f"code:{ref}"
+            if cid not in code_nodes:
+                code_nodes[cid] = {"id": cid, "kind": "code", "type": "code", "title": ref, "ref": ref,
+                                   "exact": not is_glob(ref) and not ref.endswith("/")}
+            edges.append({"source": n.link, "target": cid, "kind": "ref"})
+    counts: dict = {}
+    for n in shown:
+        counts[n.type] = counts.get(n.type, 0) + 1
+    return {
+        "meta": {
+            "slug": ctx.slug, "target": ctx.target, "target_sha": (ctx.target_sha or "")[:12],
+            "repo_root": str(ctx.repo_root) if ctx.repo_root else None, "link_prefix": ctx.link_prefix,
+            "generated": _dt.datetime.now().isoformat(timespec="seconds"), "counts": counts,
+            "stale_checked": check,
+        },
+        "nodes": nodes + list(code_nodes.values()),
+        "edges": edges,
+    }
+
+
 # --------------------------------------------------------------------------- lessons
 
 

@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vault graph</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --border: #e2e2e0;
+  --accent: #2f6fde; --edge: #c4c4c8; --edge-ref: #d9d9dc; --code-bg: #f0f0ee; --chip: #eeeef0;
+  --stale: #d64545; --unverified: #d89a1a; --label: #2b2b30; --label-bg: rgba(255,255,255,.8);
+  --t-project: #1d1d1f; --t-feature: #2f6fde; --t-guide: #1f9d74; --t-problem: #d64545;
+  --t-decision: #8a5cd1; --t-module: #e07a1f; --t-glossary: #6b7c93; --t-lesson: #c2457a;
+  --t-retro: #8a8a8f; --t-code: #a5a5ab; --t-note: #8a8a8f;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141416; --panel: #1c1c1f; --text: #ececee; --muted: #9a9aa2; --border: #2e2e33;
+    --accent: #6c9cf0; --edge: #44444b; --edge-ref: #36363c; --code-bg: #26262b; --chip: #2a2a30;
+    --stale: #ef6b6b; --unverified: #e8b04a; --label: #dcdce0; --label-bg: rgba(20,20,22,.8);
+    --t-project: #ececee; --t-feature: #6c9cf0; --t-guide: #3fc49a; --t-problem: #ef6b6b;
+    --t-decision: #a987e6; --t-module: #f0954a; --t-glossary: #8fa0b8; --t-lesson: #e06a9c;
+    --t-retro: #8a8a92; --t-code: #6a6a72; --t-note: #8a8a92;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  display: grid; grid-template-columns: 260px 1fr 440px; grid-template-rows: 100%;
+}
+aside, #detail { background: var(--panel); border-color: var(--border); border-style: solid; overflow-y: auto; }
+aside { border-width: 0 1px 0 0; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+#detail { border-width: 0 0 0 1px; padding: 20px 22px; }
+#graph-wrap { position: relative; min-width: 0; }
+#cy { position: absolute; inset: 0; }
+h1 { font-size: 16px; margin: 0; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 6px; }
+.meta { color: var(--muted); font-size: 12px; }
+input[type=search] {
+  width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--text); font: inherit;
+}
+#results { list-style: none; margin: 6px 0 0; padding: 0; }
+#results li { padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+#results li:hover { background: var(--chip); }
+label.row { display: flex; align-items: center; gap: 8px; padding: 2px 0; cursor: pointer; font-size: 13px; }
+label.row .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.dot.square { border-radius: 2px; }
+.legend div { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.ring { width: 12px; height: 12px; border-radius: 50%; border: 2px solid; flex: none; }
+.toolbar { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; z-index: 2; }
+button {
+  font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+}
+button:hover { border-color: var(--accent); }
+#error { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px;
+  text-align: center; color: var(--muted); }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--chip); color: var(--text); }
+.badge.type { color: #fff; }
+.badge.type.t-project { color: var(--bg); }
+.badge.stale { background: var(--stale); color: #fff; }
+.badge.unverified { background: var(--unverified); color: #1d1d1f; }
+.summary { font-size: 15px; margin: 8px 0 14px; }
+.section { margin: 16px 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: var(--chip); }
+ul.plain { list-style: none; padding: 0; margin: 0; }
+ul.plain li { padding: 2px 0; font-size: 13px; overflow-wrap: anywhere; }
+a, .link { color: var(--accent); text-decoration: none; cursor: pointer; }
+a:hover, .link:hover { text-decoration: underline; }
+.warnbox { border-left: 3px solid var(--stale); background: var(--code-bg); padding: 8px 10px; border-radius: 4px;
+  font-size: 13px; }
+.warnbox.amber { border-color: var(--unverified); }
+.md { border-top: 1px solid var(--border); margin-top: 18px; padding-top: 6px; overflow-wrap: anywhere; }
+.md h1, .md h2, .md h3 { text-transform: none; letter-spacing: 0; color: var(--text); margin: 18px 0 6px; }
+.md h1 { font-size: 18px; } .md h2 { font-size: 15px; } .md h3 { font-size: 14px; }
+.md code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; font-size: 12.5px; }
+.md pre { background: var(--code-bg); padding: 10px; border-radius: 6px; overflow-x: auto; }
+.md pre code { padding: 0; }
+.md table { border-collapse: collapse; font-size: 13px; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+.md a.broken { color: var(--stale); }
+.empty { color: var(--muted); }
+code.path { font-size: 12px; }
+@media (max-width: 1100px) {
+  body { grid-template-columns: 220px 1fr; }
+  #detail { position: fixed; right: 0; top: 0; bottom: 0; width: min(440px, 100vw); z-index: 5;
+    box-shadow: -8px 0 24px rgba(0,0,0,.15); display: none; }
+  body.has-selection #detail { display: block; }
+}
+@media (max-width: 700px) {
+  body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  aside { border-width: 0 0 1px; max-height: 40vh; }
+}
+</style>
+</head>
+<body>
+<aside>
+  <div>
+    <h1 id="title">Vault</h1>
+    <div class="meta" id="meta"></div>
+  </div>
+  <div>
+    <input type="search" id="search" placeholder="Search notes…" autocomplete="off">
+    <ul id="results"></ul>
+  </div>
+  <div>
+    <h2>Types</h2>
+    <div id="types"></div>
+  </div>
+  <div>
+    <h2>Show</h2>
+    <label class="row"><input type="checkbox" id="only-stale"> Only stale / unverified</label>
+  </div>
+  <div class="legend">
+    <h2>Legend</h2>
+    <div><span class="ring" style="border-color: var(--stale)"></span> stale or missing code refs</div>
+    <div><span class="ring" style="border-color: var(--unverified); border-style: dashed"></span> not verified against code</div>
+    <div>Size grows with the number of links.</div>
+  </div>
+</aside>
+<main id="graph-wrap">
+  <div class="toolbar">
+    <button id="fit">Fit</button>
+    <button id="relayout">Re-layout</button>
+  </div>
+  <div id="cy"></div>
+  <div id="error"></div>
+</main>
+<section id="detail"></section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<script>
+const DATA = /*__VAULT_DATA__*/null;
+
+const TYPES = ["project", "feature", "guide", "problem", "decision", "module", "glossary", "lesson", "retro", "note", "code"];
+const TYPE_LABELS = { code: "code files" };
+const HIDDEN_BY_DEFAULT = new Set(["lesson", "retro", "code"]);
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+for (const n of DATA.nodes) if (!TYPES.includes(n.type)) n.type = "note";
+const nodesById = new Map(DATA.nodes.map((n) => [n.id, n]));
+const relToId = new Map();
+const baseToIds = new Map();
+for (const n of DATA.nodes) {
+  if (n.kind !== "note") continue;
+  relToId.set(n.rel, n.id);
+  const base = n.rel.split("/").pop();
+  if (!baseToIds.has(base)) baseToIds.set(base, []);
+  baseToIds.get(base).push(n.id);
+}
+const outgoing = new Map();
+const incoming = new Map();
+for (const e of DATA.edges) {
+  if (!outgoing.has(e.source)) outgoing.set(e.source, []);
+  if (!incoming.has(e.target)) incoming.set(e.target, []);
+  outgoing.get(e.source).push(e);
+  incoming.get(e.target).push(e);
+}
+
+function resolveLink(target) {
+  const t = target.trim();
+  const cand = t.endsWith(".md") ? t : t + ".md";
+  if (relToId.has(cand)) return relToId.get(cand);
+  const hits = baseToIds.get(cand.split("/").pop()) || [];
+  return hits.length === 1 ? hits[0] : null;
+}
+
+const isStale = (n) => n.state === "stale" || (n.missing && n.missing.length > 0);
+const isUnverified = (n) => n.state === "unverified";
+
+const enabled = new Set(TYPES.filter((t) => !HIDDEN_BY_DEFAULT.has(t)));
+const typeInputs = new Map();
+let selectedId = null;
+let cy = null;
+
+function header() {
+  const m = DATA.meta;
+  document.title = `Vault graph: ${m.slug}`;
+  $("title").textContent = m.slug;
+  const notes = DATA.nodes.filter((n) => n.kind === "note").length;
+  const parts = [`${notes} notes`];
+  if (m.target) parts.push(`${m.target}${m.target_sha ? " @" + m.target_sha : ""}`);
+  parts.push(`generated ${m.generated.replace("T", " ")}`);
+  if (!m.stale_checked) parts.push("staleness not checked");
+  $("meta").textContent = parts.join(" · ");
+}
+
+function typeFilters() {
+  const counts = {};
+  for (const n of DATA.nodes) counts[n.type] = (counts[n.type] || 0) + 1;
+  const box = $("types");
+  for (const t of TYPES) {
+    if (!counts[t]) continue;
+    const row = document.createElement("label");
+    row.className = "row";
+    row.innerHTML = `<input type="checkbox" ${enabled.has(t) ? "checked" : ""}>
+      <span class="dot ${t === "code" ? "square" : ""}" style="background: var(--t-${t})"></span>
+      ${esc(TYPE_LABELS[t] || t)}<span class="count">${counts[t]}</span>`;
+    typeInputs.set(t, row.querySelector("input"));
+    row.querySelector("input").addEventListener("change", (ev) => {
+      ev.target.checked ? enabled.add(t) : enabled.delete(t);
+      applyFilters(true);
+    });
+    box.appendChild(row);
+  }
+}
+
+function elements() {
+  const degree = new Map();
+  for (const e of DATA.edges) {
+    degree.set(e.source, (degree.get(e.source) || 0) + 1);
+    degree.set(e.target, (degree.get(e.target) || 0) + 1);
+  }
+  const nodes = DATA.nodes.map((n) => {
+    const d = degree.get(n.id) || 0;
+    const base = n.kind === "code" ? 10 : n.type === "project" ? 34 : 16;
+    const classes = [n.kind];
+    if (n.kind === "note" && isStale(n)) classes.push("stale");
+    else if (n.kind === "note" && isUnverified(n)) classes.push("unverified");
+    return {
+      group: "nodes",
+      classes: classes.join(" "),
+      data: {
+        id: n.id, type: n.type, size: Math.min(base + 5 * Math.sqrt(d), 64),
+        label: n.kind === "code" ? n.ref.replace(/\/$/, "").split("/").pop() : n.title,
+      },
+    };
+  });
+  const edges = DATA.edges.map((e, i) => ({
+    group: "edges", classes: e.kind, data: { id: "e" + i, source: e.source, target: e.target },
+  }));
+  return nodes.concat(edges);
+}
+
+function style() {
+  const s = [
+    { selector: "node", style: {
+      "width": "data(size)", "height": "data(size)", "label": "data(label)", "font-size": 10,
+      "color": css("--label"), "text-valign": "bottom", "text-margin-y": 4, "text-wrap": "ellipsis",
+      "text-max-width": 140, "text-background-color": css("--label-bg"), "text-background-opacity": 1,
+      "text-background-padding": 1, "border-width": 0, "min-zoomed-font-size": 8,
+    } },
+    { selector: "node.code", style: { "shape": "round-rectangle", "font-size": 9 } },
+    { selector: "node.stale", style: { "border-width": 3, "border-color": css("--stale") } },
+    { selector: "node.unverified", style: { "border-width": 2, "border-color": css("--unverified"), "border-style": "dashed" } },
+    { selector: "edge", style: {
+      "width": 1.2, "line-color": css("--edge"), "curve-style": "bezier", "target-arrow-shape": "triangle",
+      "target-arrow-color": css("--edge"), "arrow-scale": 0.7, "opacity": 0.9,
+    } },
+    { selector: "edge.ref", style: { "line-style": "dashed", "line-color": css("--edge-ref"), "target-arrow-shape": "none" } },
+    { selector: ".faded", style: { "opacity": 0.12 } },
+    { selector: "node.hidden, edge.hidden", style: { "display": "none" } },
+    { selector: "node.match", style: { "underlay-color": css("--accent"), "underlay-opacity": 0.25, "underlay-padding": 6, "underlay-shape": "ellipse" } },
+    { selector: "node:selected", style: { "underlay-color": css("--accent"), "underlay-opacity": 0.35, "underlay-padding": 8, "underlay-shape": "ellipse", "font-weight": "bold", "z-index": 10 } },
+    { selector: "node.code.match, node.code:selected", style: { "underlay-shape": "round-rectangle" } },
+  ];
+  for (const t of TYPES) s.push({ selector: `node[type = "${t}"]`, style: { "background-color": css("--t-" + t) } });
+  return s;
+}
+
+function runLayout(fit = true) {
+  const visible = cy.elements().not(".hidden");
+  visible.layout({
+    name: "cose", animate: false, randomize: true, fit, padding: 40, nodeRepulsion: () => 60000,
+    idealEdgeLength: (e) => (e.hasClass("ref") ? 60 : 140), edgeElasticity: () => 60, gravity: 0.15,
+    numIter: 1500, componentSpacing: 60, nodeDimensionsIncludeLabels: true,
+  }).run();
+}
+
+function applyFilters(relayout) {
+  const onlyStale = $("only-stale").checked;
+  cy.batch(() => {
+    cy.nodes().forEach((ele) => {
+      const n = nodesById.get(ele.id());
+      let show = enabled.has(n.type);
+      if (show && onlyStale && n.kind === "note") show = isStale(n) || isUnverified(n);
+      ele.toggleClass("hidden", !show);
+    });
+    if (onlyStale) {
+      cy.nodes(".code").forEach((ele) => {
+        const linked = ele.connectedEdges().sources().some((s) => !s.hasClass("hidden"));
+        if (!linked) ele.addClass("hidden");
+      });
+    }
+    cy.edges().forEach((e) => e.toggleClass("hidden", e.source().hasClass("hidden") || e.target().hasClass("hidden")));
+  });
+  if (selectedId && cy.getElementById(selectedId).hasClass("hidden")) clearSelection();
+  if (relayout) runLayout();
+}
+
+function focusOn(ele) {
+  cy.batch(() => {
+    cy.elements().removeClass("faded");
+    if (!ele) return;
+    const keep = ele.closedNeighborhood();
+    cy.elements().not(keep).addClass("faded");
+  });
+}
+
+function reveal(id) {
+  const n = nodesById.get(id);
+  if (!n) return false;
+  if (!enabled.has(n.type)) {
+    enabled.add(n.type);
+    if (typeInputs.has(n.type)) typeInputs.get(n.type).checked = true;
+    $("only-stale").checked = false;
+    applyFilters(true);
+  } else if (cy.getElementById(id).hasClass("hidden")) {
+    $("only-stale").checked = false;
+    applyFilters(true);
+  }
+  return true;
+}
+
+function select(id, center = true) {
+  if (!reveal(id)) return;
+  const ele = cy.getElementById(id);
+  cy.elements().unselect();
+  ele.select();
+  selectedId = id;
+  focusOn(ele);
+  if (center) cy.animate({ center: { eles: ele }, zoom: Math.max(cy.zoom(), 1.1) }, { duration: 250 });
+  renderDetail(nodesById.get(id));
+  document.body.classList.add("has-selection");
+  const hash = "#note=" + encodeURIComponent(id);
+  if (location.hash !== hash) history.replaceState(null, "", hash);
+}
+
+function clearSelection() {
+  selectedId = null;
+  cy.elements().unselect();
+  focusOn(null);
+  document.body.classList.remove("has-selection");
+  history.replaceState(null, "", location.pathname + location.search);
+  renderOverview();
+}
+
+function noteLink(id) {
+  const n = nodesById.get(id);
+  return `<span class="link" data-node="${esc(id)}">${esc(n ? n.title : id)}</span>`;
+}
+
+function editorUrl(ref) {
+  const root = DATA.meta.repo_root;
+  return root ? "vscode://file" + encodeURI(("/" + root + "/" + ref).replace(/\/+/g, "/")) : null;
+}
+
+function renderMarkdown(body, broken) {
+  const parts = body.split(/(```[\s\S]*?```|`[^`\n]*`)/g);
+  const linked = parts.map((p, i) => (i % 2 ? p : p.replace(/\[\[([^\]|#\n]+)(#[^\]|\n]*)?(?:\|([^\]\n]*))?\]\]/g, (_, target, heading, label) => {
+    const text = (label || target.split("/").pop() + (heading || "")).replace(/[\[\]]/g, "");
+    const id = resolveLink(target);
+    if (id) return `<a class="wl" data-node="${esc(id)}" href="#note=${encodeURIComponent(id)}">${esc(text)}</a>`;
+    return broken.includes(target.trim()) ? `<a class="broken" title="broken link">${esc(text)}</a>` : `<em>${esc(text)}</em>`;
+  }))).join("");
+  return DOMPurify.sanitize(marked.parse(linked));
+}
+
+function renderDetail(n) {
+  const d = $("detail");
+  if (n.kind === "code") {
+    const notes = (incoming.get(n.id) || []).map((e) => e.source);
+    const url = n.exact ? editorUrl(n.ref) : null;
+    d.innerHTML = `
+      <h2>Code ${n.exact ? "file" : "path"}</h2>
+      <h1><code class="path">${esc(n.ref)}</code></h1>
+      ${url ? `<p><a href="${esc(url)}">Open in editor</a></p>` : ""}
+      <div class="section"><h2>Referenced by ${notes.length} note(s)</h2>
+        <ul class="plain">${notes.map((id) => `<li>${noteLink(id)}</li>`).join("")}</ul></div>`;
+    return;
+  }
+  const links = (outgoing.get(n.id) || []).filter((e) => e.kind === "link").map((e) => e.target);
+  const back = (incoming.get(n.id) || []).filter((e) => e.kind === "link").map((e) => e.source);
+  const badges = [`<span class="badge type t-${esc(n.type)}" style="background: var(--t-${esc(n.type)})">${esc(n.type)}</span>`];
+  if (n.status) badges.push(`<span class="badge">${esc(n.status)}</span>`);
+  if (isStale(n)) badges.push(`<span class="badge stale">stale</span>`);
+  else if (isUnverified(n)) badges.push(`<span class="badge unverified">unverified</span>`);
+  else if (n.state === "ok") badges.push(`<span class="badge">verified ${esc(n.verified)}</span>`);
+  if (n.tokens) badges.push(`<span class="badge">~${n.tokens} tokens</span>`);
+
+  let warn = "";
+  if (n.state === "stale" && n.changed && n.changed.length) {
+    warn += `<div class="warnbox">Changed since ${esc(n.verified)}:<ul class="plain">${n.changed.map((f) => `<li><code class="path">${esc(f)}</code></li>`).join("")}</ul></div>`;
+  }
+  if (n.missing && n.missing.length) {
+    warn += `<div class="warnbox">Missing at ${esc(DATA.meta.target || "target")}:<ul class="plain">${n.missing.map((f) => `<li><code class="path">${esc(f)}</code></li>`).join("")}</ul></div>`;
+  }
+  if (isUnverified(n)) warn += `<div class="warnbox amber">Not verified against code yet.</div>`;
+  if (n.broken_links && n.broken_links.length) {
+    warn += `<div class="warnbox">Broken links: ${n.broken_links.map((l) => `<code>[[${esc(l)}]]</code>`).join(", ")}</div>`;
+  }
+
+  const refs = n.code_refs.map((r) => {
+    const code = nodesById.get("code:" + r);
+    const url = code && code.exact ? editorUrl(r) : null;
+    return `<li><span class="link" data-node="${esc("code:" + r)}"><code class="path">${esc(r)}</code></span>${url ? ` · <a href="${esc(url)}">open</a>` : ""}</li>`;
+  }).join("");
+
+  d.innerHTML = `
+    <h1>${esc(n.title)}</h1>
+    <div class="meta"><code class="path">${esc(n.rel)}</code></div>
+    <div class="badges">${badges.join("")}</div>
+    ${n.summary ? `<p class="summary">${esc(n.summary)}</p>` : ""}
+    ${warn ? `<div class="section">${warn}</div>` : ""}
+    ${n.aliases.length ? `<div class="section"><h2>Aliases</h2><div class="chips">${n.aliases.map((a) => `<span class="chip">${esc(a)}</span>`).join("")}</div></div>` : ""}
+    ${refs ? `<div class="section"><h2>Code refs</h2><ul class="plain">${refs}</ul></div>` : ""}
+    <div class="section"><h2>Links (${links.length})</h2>${links.length ? `<ul class="plain">${links.map((id) => `<li>${noteLink(id)}</li>`).join("")}</ul>` : `<div class="empty">none</div>`}</div>
+    <div class="section"><h2>Backlinks (${back.length})</h2>${back.length ? `<ul class="plain">${back.map((id) => `<li>${noteLink(id)}</li>`).join("")}</ul>` : `<div class="empty">none</div>`}</div>
+    <div class="md">${renderMarkdown(n.body, n.broken_links || [])}</div>`;
+  d.scrollTop = 0;
+}
+
+function renderOverview() {
+  const m = DATA.meta;
+  const notes = DATA.nodes.filter((n) => n.kind === "note");
+  const stale = notes.filter(isStale);
+  const unverified = notes.filter(isUnverified);
+  const index = notes.find((n) => n.type === "project");
+  const list = (arr) => `<ul class="plain">${arr.map((n) => `<li>${noteLink(n.id)}</li>`).join("")}</ul>`;
+  $("detail").innerHTML = `
+    <h2>Project</h2>
+    <h1>${esc(m.slug)}</h1>
+    ${index && index.summary ? `<p class="summary">${esc(index.summary)}</p>` : ""}
+    <p class="empty">Click a node to see its note. Esc clears the selection.</p>
+    ${index ? `<div class="section"><h2>Start here</h2><ul class="plain"><li>${noteLink(index.id)}</li></ul></div>` : ""}
+    ${m.stale_checked ? `<div class="section"><h2>Stale (${stale.length})</h2>${stale.length ? list(stale) : `<div class="empty">none</div>`}</div>
+    <div class="section"><h2>Unverified (${unverified.length})</h2>${unverified.length ? list(unverified) : `<div class="empty">none</div>`}</div>` : ""}`;
+}
+
+function searchNotes(q) {
+  const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const res = $("results");
+  res.innerHTML = "";
+  cy.nodes().removeClass("match");
+  if (!terms.length) return [];
+  const scored = [];
+  for (const n of DATA.nodes) {
+    if (n.kind !== "note") continue;
+    const title = n.title.toLowerCase();
+    const hay = [title, n.aliases.join(" "), n.summary, n.id].join(" ").toLowerCase();
+    if (!terms.every((t) => hay.includes(t))) continue;
+    scored.push([terms.filter((t) => title.includes(t)).length, n]);
+  }
+  scored.sort((a, b) => b[0] - a[0] || a[1].title.localeCompare(b[1].title));
+  const hits = scored.map((s) => s[1]);
+  cy.batch(() => hits.forEach((n) => cy.getElementById(n.id).addClass("match")));
+  for (const n of hits.slice(0, 12)) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="dot" style="display:inline-block; background: var(--t-${esc(n.type)})"></span> ${esc(n.title)}`;
+    li.addEventListener("click", () => select(n.id));
+    res.appendChild(li);
+  }
+  return hits;
+}
+
+function fromHash() {
+  const m = location.hash.match(/^#note=(.+)$/);
+  if (m) {
+    const id = decodeURIComponent(m[1]);
+    if (nodesById.has(id)) { select(id); return true; }
+  }
+  return false;
+}
+
+function init() {
+  header();
+  if (typeof cytoscape === "undefined" || typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+    const e = $("error");
+    e.style.display = "flex";
+    e.textContent = "The graph needs cdnjs.cloudflare.com to load cytoscape.js, marked and DOMPurify. Check the connection and reload.";
+    return;
+  }
+  typeFilters();
+  cy = cytoscape({ container: $("cy"), elements: elements(), style: style(), wheelSensitivity: 0.25,
+                   minZoom: 0.1, maxZoom: 4, selectionType: "single", boxSelectionEnabled: false });
+  applyFilters(false);
+  runLayout();
+
+  cy.on("tap", "node", (ev) => select(ev.target.id(), false));
+  cy.on("tap", (ev) => { if (ev.target === cy) clearSelection(); });
+  cy.on("mouseover", "node", (ev) => { focusOn(ev.target); $("cy").style.cursor = "pointer"; });
+  cy.on("mouseout", "node", () => { focusOn(selectedId ? cy.getElementById(selectedId) : null); $("cy").style.cursor = ""; });
+
+  $("detail").addEventListener("click", (ev) => {
+    const a = ev.target.closest("[data-node]");
+    if (!a) {
+      const href = ev.target.closest("a[href]");
+      if (href && !/^(https?:|vscode:|mailto:)/i.test(href.getAttribute("href"))) ev.preventDefault();
+      if (href && /^https?:/i.test(href.getAttribute("href"))) { ev.preventDefault(); window.open(href.href, "_blank", "noopener"); }
+      return;
+    }
+    ev.preventDefault();
+    select(a.dataset.node);
+  });
+  $("search").addEventListener("input", (ev) => searchNotes(ev.target.value));
+  $("search").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      const hits = searchNotes(ev.target.value);
+      if (hits.length) select(hits[0].id);
+    }
+  });
+  $("only-stale").addEventListener("change", () => applyFilters(true));
+  $("fit").addEventListener("click", () => cy.animate({ fit: { eles: cy.elements().not(".hidden"), padding: 40 } }, { duration: 250 }));
+  $("relayout").addEventListener("click", () => runLayout());
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      if (document.activeElement === $("search")) { $("search").value = ""; searchNotes(""); $("search").blur(); }
+      else clearSelection();
+    }
+  });
+  window.addEventListener("hashchange", fromHash);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => cy.style(style()));
+  if (!fromHash()) renderOverview();
+}
+
+init();
+</script>
+</body>
+</html>
