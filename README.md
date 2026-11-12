@@ -22,7 +22,7 @@ Requirements: `git` and `python3` ≥ 3.10 on `PATH`.
 ### Claude Code plugin (skill + agents + hook)
 
 ```
-/plugin marketplace add <owner>/agent-vault
+/plugin marketplace add dmytromykhailiuk/agent-vault
 /plugin install agent-vault@agent-vault
 ```
 
@@ -32,7 +32,7 @@ pre-approve the CLI and your vault dir with `vault setup --agent claude --only p
 ### Codex plugin (skill + hook)
 
 ```
-codex plugin marketplace add <owner>/agent-vault
+codex plugin marketplace add dmytromykhailiuk/agent-vault
 ```
 
 Install `agent-vault` from `/plugins`, then add the agents (Codex plugins can't ship custom agents):
@@ -44,7 +44,7 @@ Install `agent-vault` from `/plugins`, then add the agents (Codex plugins can't 
 ### skills.sh (skill only, any agent)
 
 ```
-npx skills add <owner>/agent-vault -g -a claude-code -a codex
+npx skills add dmytromykhailiuk/agent-vault -g -a claude-code -a codex
 ```
 
 skills.sh copies only the skill folder, so install the agents, the hook and the permissions once:
