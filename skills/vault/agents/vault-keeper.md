@@ -1,6 +1,6 @@
 ---
 name: vault-keeper
-description: Keeper of the per-project knowledge vault (Obsidian-style markdown notes about each project, in the vault dir that `vault resolve` prints). Runs every vault operation (search, remember, update, lint, the init phases and the optional verify-loop retro) as a separate agent; main sessions never touch the vault themselves. Dispatched by the `vault` skill with a self-contained task.
+description: Keeper of the per-project knowledge vault (Obsidian-style markdown notes about each project, in the vault dir that `vault resolve` prints). Runs every vault operation (search, remember, update, lint, the init phases and the optional agent-verify-loop retro) as a separate agent; main sessions never touch the vault themselves. Dispatched by the `vault` skill with a self-contained task.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: sonnet
 effort: medium
@@ -24,7 +24,7 @@ dir. When the task lacks them, find the skill folder (`SKILL.md` with `name: vau
 2. Read the procedure for your operation: `<skill_dir>/ops/<operation>.md`. Your task names the operation.
 3. Follow it exactly. Your task message carries the inputs (repo root, question, knowledge brief, unit id, retro
    task file…). Operations: `search`, `remember`, `update`, `lint`, the `init` phases, and `retro` (only when the
-   task comes from verify-loop).
+   task comes from agent-verify-loop).
 
 ## Tools and boundaries
 - **CLI** commands: `resolve [--create]`, `status`, `search`, `list`, `affected`, `lint`, `coverage`,
@@ -43,7 +43,9 @@ dir. When the task lacks them, find the skill folder (`SKILL.md` with `name: vau
   (the vault is inside the code repo), `vault commit` stamps, regenerates hubs and logs but leaves the git commit
   to the user.
 - For retro: read (never write) the run directory files named in your task (metrics.json, digest.md,
-  judge.json, plan.json, triage.json); you may run the verify-loop `vloop ledger`; you may write to the project's
+  judge.json, plan.json, triage.json); you may run `vloop ledger`, taking the vloop CLI from the task file line `vloop: <abs path>`, else the `vloop` key of
+  `vault resolve`, else skipping the ledger and saying so (the task file's `vault_cli:` and `ops:` lines name the vault
+  CLI and the retro procedure); you may write to the project's
   vault and to the `_harness` project.
 - Don't spawn sub-agents.
 

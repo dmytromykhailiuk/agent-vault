@@ -616,6 +616,110 @@ class HookOutput(SetupBase):
         self.assertIn("SessionStart", json.loads(p.stdout)["hookSpecificOutput"]["hookEventName"])
 
 
+class VersionAndVloop(SetupBase):
+    def fake(self, path: Path, body: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    def vloop_json(self, name="agent-verify-loop", contract=1, version="2.0.0") -> str:
+        return "echo '" + json.dumps({"name": name, "version": version, "contract": contract}) + "'"
+
+    def env(self, **extra):
+        home = self.tmp / "home"
+        home.mkdir(exist_ok=True)
+        env = {"HOME": str(home), "CLAUDE_CONFIG_DIR": str(self.claude), "CODEX_HOME": str(self.codex),
+               "PATH": str(self.tmp / "emptybin")}
+        env.update(extra)
+        return mock.patch.dict(os.environ, env)
+
+    def test_version_json_and_text(self):
+        out = subprocess.run([sys.executable, str(BIN), "version", "--json"], capture_output=True, text=True,
+                             cwd=str(self.tmp), check=True).stdout
+        data = json.loads(out)
+        self.assertEqual(set(data), {"name", "version", "contract", "skill_dir", "cli"})
+        self.assertEqual((data["name"], data["contract"]), ("agent-vault", 1))
+        self.assertEqual(data["version"], read_json(ROOT / ".claude-plugin/plugin.json")["version"])
+        self.assertTrue(Path(data["cli"]).is_absolute())
+        text = subprocess.run([sys.executable, str(BIN), "version"], capture_output=True, text=True,
+                              cwd=str(self.tmp), check=True).stdout
+        self.assertEqual(text.strip(), f"agent-vault {data['version']} (contract 1)")
+
+    def test_none_found(self):
+        with self.env():
+            self.assertIsNone(setup.find_vloop())
+
+    def test_env_override_and_name_check(self):
+        good = self.fake(self.tmp / "x" / "vloop", self.vloop_json())
+        with self.env(VLOOP_CLI=str(good)):
+            self.assertEqual(setup.find_vloop(), {"cli": str(good), "version": "2.0.0", "contract": 1})
+        bad = self.fake(self.tmp / "bin" / "vloop", self.vloop_json(name="other"))
+        with self.env(PATH=str(bad.parent)):
+            self.assertIsNone(setup.find_vloop())
+
+    def test_path_beats_plugin_cache(self):
+        on_path = self.fake(self.tmp / "bin" / "vloop", self.vloop_json(version="1.0.0"))
+        self.fake(self.claude / "plugins/cache/mk/agent-verify-loop/2.0.0/skills/verify-loop/bin/vloop",
+                  self.vloop_json(version="2.0.0"))
+        with self.env(PATH=str(on_path.parent)):
+            self.assertEqual(setup.find_vloop()["version"], "1.0.0")
+
+    def test_plugin_caches(self):
+        rel = "skills/verify-loop/bin/vloop"
+        old = self.fake(self.claude / "plugins/cache/mk/agent-verify-loop/1.0.0" / rel, self.vloop_json(version="1.0.0"))
+        new = self.fake(self.claude / "plugins/cache/mk/agent-verify-loop/2.0.0" / rel, self.vloop_json(version="2.0.0"))
+        os.utime(old, (1, 1))
+        with self.env():
+            self.assertEqual(setup.find_vloop()["cli"], str(new))
+        new.unlink()
+        old.unlink()
+        cx = self.fake(self.codex / "plugins/cache/x/agent-verify-loop/3.0.0" / rel, self.vloop_json(version="3.0.0"))
+        with self.env():
+            self.assertEqual(setup.find_vloop()["cli"], str(cx))
+
+    def test_legacy_install_is_contract_zero(self):
+        legacy = self.fake(self.claude / "skills/verify-loop/bin/vloop", "echo 'usage: vloop <command>' >&2; exit 2")
+        with self.env():
+            self.assertEqual(setup.find_vloop(), {"cli": str(legacy), "version": "", "contract": 0})
+        legacy.chmod(0o644)
+        with self.env():
+            self.assertIsNone(setup.find_vloop())
+
+    def test_hanging_or_crashing_legacy_install_is_ignored(self):
+        legacy = self.claude / "skills/verify-loop/bin/vloop"
+        for body in ("exec /bin/sleep 10", "kill -9 $$", "exit 0"):
+            self.fake(legacy, body)
+            with self.env(), mock.patch.object(setup.subprocess, "run", wraps=setup.subprocess.run) as run:
+                self.assertIsNone(setup.find_vloop())
+            self.assertEqual(run.call_count, 1)
+
+    def test_resolve_reports_vloop(self):
+        good = self.fake(self.tmp / "x" / "vloop", self.vloop_json())
+        env = {**os.environ, "VLOOP_CLI": str(good)}
+        out = subprocess.run([sys.executable, str(BIN), "resolve", "--cwd", str(self.repo)], capture_output=True,
+                             text=True, cwd=str(self.tmp), env=env, check=True).stdout
+        self.assertEqual(json.loads(out)["vloop"]["contract"], 1)
+        env = {**os.environ, "VLOOP_CLI": "", "PATH": str(self.tmp / "emptybin"), "CLAUDE_CONFIG_DIR": str(self.claude),
+               "CODEX_HOME": str(self.codex), "HOME": str(self.tmp / "home")}
+        out = subprocess.run([sys.executable, str(BIN), "resolve", "--cwd", str(self.repo)], capture_output=True,
+                             text=True, cwd=str(self.tmp), env=env, check=True).stdout
+        self.assertIn("vloop", json.loads(out))
+        self.assertIsNone(json.loads(out)["vloop"])
+
+    def test_skip_agent_by_suffix(self):
+        from vaultlib import cli
+        for name in ("vault-keeper", "vault-reviewer", "agent-vault:vault-keeper", "verify-qa",
+                     "agent-verify-loop:verify-reviewer", "agent-verify-loop:verify-triage"):
+            self.assertTrue(cli.skip_agent(name), name)
+        for name in ("", None, "general-purpose", "vaultish", "my-plugin:claude", "agent-vault:other"):
+            self.assertFalse(cli.skip_agent(name), name)
+        for agent in ("agent-vault:vault-keeper", "agent-verify-loop:verify-reviewer"):
+            r = subprocess.run([sys.executable, str(BIN), "context", "--hook"], input=json.dumps(
+                {"cwd": str(self.repo), "agent_type": agent}), capture_output=True, text=True, cwd=str(self.tmp))
+            self.assertEqual(r.stdout, "")
+
+
 class Packaging(unittest.TestCase):
     def j(self, rel):
         return read_json(ROOT / rel)

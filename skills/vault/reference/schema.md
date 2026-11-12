@@ -272,10 +272,14 @@ The retros hub lists them newest first.
 
 ## CLI for lessons and coverage
 
+- `vault lessons --format json` objects: `{link, path, title, rule, occurrences, last_seen, scope, audience, category,
+  proposal_status, proposal_kind, proposal_target}`; `vault covering --format json`: `{link, title, summary, type, stale}`.
 - `vault lessons [--audience A] [--limit N] [--format bullets|json] [--proposals] [--no-harness]`: active lessons
   of the project (default N 5), then `_harness` lessons up to ceil(N/2). `--proposals` lists lessons with
   `proposal_status: open` (project + harness) as `- [[<link>]] — <kind> → <target>: <summary>`. Outside an
   initialized project: harness only. Nothing → empty output.
+- `vault version [--json]`: `agent-vault <version> (contract 1)`, or JSON `{name, version, contract, skill_dir, cli}`.
+  `vault resolve` also prints `vloop` (`{cli, version, contract}` of the optional agent-verify-loop CLI, else null).
 - `vault covering <path>… [--format bullets|json] [--limit N]`: notes whose `code_refs` match any path,
   `- [[<link>]] — <title>: <summary>[ (stale)]`.
 - `vault proposal accept|reject <note>`: accept → `proposal_status: applied` (a `rule-promotion` also becomes
@@ -283,4 +287,5 @@ The retros hub lists them newest first.
   after the user approved it.
 - Session context (`vault context --hook`) appends a lessons block: up to 5 project and 3 harness lessons for the
   `implementer`/`orchestrator` audience (`promoted`/`retired` never shown) plus the count of open proposals. Agents
-  named `vault*` and `verify-*` get no session context.
+  named `vault-*` and `verify-*` (with or without a plugin namespace such as `agent-vault:` or
+  `agent-verify-loop:`) get no session context.

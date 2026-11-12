@@ -1,8 +1,9 @@
 # Operation: retro
 
-Optional integration with the verify-loop harness: this operation runs only when a verify-loop retro dispatches it.
+Optional integration with agent-verify-loop (vloop): this operation runs only when a vloop retro dispatches it.
 
-**Inputs:** a retro task file from `vloop retro-plan` (run id, session id, repo root, project slug, the paths of
+**Inputs:** a retro task file from `vloop retro-plan` (run id, session id, repo root, project slug, the lines `vloop: <abs>`,
+`vault_cli: <abs>` and `ops: <abs path of this file>`, the paths of
 `metrics.json`, `digest.md` and the per-attempt judge files) or, for a non-repo session, the same without a repo.
 Read only the files the task names (plus `plan.json` / `triage.json` next to a judge file when you need them);
 never open raw transcripts, never write anything outside the vault.
@@ -10,8 +11,9 @@ never open raw transcripts, never write anything outside the vault.
 **Goal:** turn one verified task into evidence-backed lessons: what went well, what went badly and why, counted
 across retros, so recurring failures become rules and, at 3 occurrences, proposed harness changes.
 
-`vloop` below is the verify-loop CLI: the path your task names, else `command -v vloop`, else
-`~/.claude/skills/verify-loop/bin/vloop`. If none exists, skip the ledger baselines and say so in the report.
+`vloop` below is the agent-verify-loop CLI: the path on the task file's `vloop: <abs path>` line, else the `vloop`
+key of `vault resolve` (when not null), otherwise skip the ledger baselines and say so in the report. Use
+`vault_cli` from the task file as the vault CLI when given.
 
 ## Steps
 1. **Resolve.**
@@ -33,7 +35,7 @@ across retros, so recurring failures become rules and, at 3 occurrences, propose
      would have caught, an escaped UI bug after `checks`), Opus where Sonnet would do or vice versa, triage cost;
    - **reviewer calibration**: blocking findings the judge downgraded, findings later withdrawn (noise); compare
      them with the reviewer rubric ("Calibration: what blocks and what doesn't" in the
-     verify-loop `verify-reviewer` agent file, when your task names it);
+     agent-verify-loop `verify-reviewer` agent file, when your task names it);
    - **environment**: QA blocked reasons, missing run recipes or commands, login state (`auth_missing`,
      `auth_expired`);
    - **communication**: user corrections, interruptions, re-asked questions. Ignore `signals.corrections` in

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `vault version [--json]` and the integration contract (1) with agent-verify-loop; `vloop` discovery in
+  `vault resolve` / `vault doctor`; agent skipping by name suffix (`agent-vault:`, `agent-verify-loop:` namespaces);
+  `path` in `vault lessons --format json`; the retro no longer hardcodes the vloop path.
 - `vault graph`: an interactive HTML graph of the project's notes (links, code files, staleness) with a
   detail panel that renders the clicked note.
 

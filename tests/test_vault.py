@@ -621,7 +621,7 @@ class TestLessonsAndRetros(VaultTestCase):
         self.assertEqual(out, ["- Rule three newer. (×3, project) [[demo/lessons/three-newer]]"])
         data = json.loads(self.run_cli("lessons", "--format", "json", "--limit", "1", "--no-harness"))
         self.assertEqual(data[0]["link"], "demo/lessons/three-newer")
-        self.assertEqual(set(data[0]), {"link", "title", "rule", "occurrences", "last_seen", "scope", "audience",
+        self.assertEqual(set(data[0]), {"link", "path", "title", "rule", "occurrences", "last_seen", "scope", "audience",
                                         "category", "proposal_status", "proposal_kind", "proposal_target"})
         self.assertEqual(data[0]["occurrences"], 3)
         self.lesson("hp", project=h, title="HP", scope="harness", proposal_status="open",

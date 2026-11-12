@@ -16,6 +16,8 @@ from . import gitutil as g
 
 SCHEMA = 1
 SKILL_DIR = Path(__file__).resolve().parent.parent.parent
+VERSION = "0.1.0"
+CONTRACT = 1
 CONTENT_TYPES = ("feature", "guide", "problem", "decision", "module", "lesson", "retro")
 FOLDERS = {
     "feature": "features",
@@ -425,6 +427,11 @@ def git_host(path: Path) -> Path | None:
     return top.resolve() if top else None
 
 
+def _find_vloop():
+    from . import setup
+    return setup.find_vloop()
+
+
 @dataclass
 class Ctx:
     vault: Path | None  # vault root: the shared root, or the project dir itself
@@ -536,6 +543,7 @@ class Ctx:
             "commits_behind": self.commits_behind(),
             "skill_dir": str(SKILL_DIR),
             "cli": str(SKILL_DIR / "bin" / "vault"),
+            "vloop": _find_vloop(),
         }
 
 
@@ -1242,7 +1250,7 @@ def open_proposals(ctx: Ctx) -> list:
 
 def lesson_dict(n: Note) -> dict:
     return {
-        "link": n.link, "title": n.title, "rule": lesson_rule(n), "occurrences": lesson_occurrences(n),
+        "link": n.link, "path": str(n.path), "title": n.title, "rule": lesson_rule(n), "occurrences": lesson_occurrences(n),
         "last_seen": str(n.fm.get("last_seen") or ""), "scope": str(n.fm.get("scope") or ""),
         "audience": _as_list(n.fm.get("audience")), "category": str(n.fm.get("category") or ""),
         "proposal_status": str(n.fm.get("proposal_status") or "none"),

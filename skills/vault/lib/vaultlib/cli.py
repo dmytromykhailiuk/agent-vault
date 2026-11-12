@@ -19,7 +19,11 @@ from . import setup
 HOOK_MAX = 6000
 LESSONS_BLOCK_MAX = 1000
 HOOK_AUDIENCE = ("implementer", "orchestrator")
-SKIP_AGENT_PREFIXES = ("vault", "verify-", "agent-vault:")
+SKIP_AGENT_PREFIXES = ("vault-", "verify-")
+
+
+def skip_agent(name) -> bool:
+    return str(name or "").rsplit(":", 1)[-1].startswith(SKIP_AGENT_PREFIXES)
 
 
 def _ctx(args) -> core.Ctx:
@@ -66,6 +70,15 @@ def cmd_resolve(args) -> int:
             saved = str(core.save_dir_setting(args.save, ctx.repo_root, args.vault_dir))
         data = {**ctx.to_dict(), "created": created, "saved_setting": saved}
     print(json.dumps(data, indent=2))
+    return 0
+
+
+def cmd_version(args) -> int:
+    if args.json:
+        print(json.dumps({"name": "agent-vault", "version": core.VERSION, "contract": core.CONTRACT,
+                          "skill_dir": str(core.SKILL_DIR), "cli": str(core.SKILL_DIR / "bin" / "vault")}))
+    else:
+        print(f"agent-vault {core.VERSION} (contract {core.CONTRACT})")
     return 0
 
 
@@ -207,7 +220,7 @@ def cmd_context(args) -> int:
             raw = sys.stdin.read()
             if raw.strip():
                 data = json.loads(raw)
-        if str(data.get("agent_type") or "").startswith(SKIP_AGENT_PREFIXES):
+        if skip_agent(data.get("agent_type")):
             return 0
         ctx = core.resolve(data.get("cwd") or args.cwd, vault_dir=args.vault_dir)
         text = _context_text(ctx)
@@ -721,6 +734,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--save", choices=["local", "project", "user", "none"], default="local",
                    help="with --create --vault-dir: where to persist it (default: repo .agent-vault.local.json)")
     s.set_defaults(fn=cmd_resolve)
+
+    s = sub.add_parser("version", help="print the version and the integration contract number")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_version)
 
     s = sub.add_parser("status", parents=[common], help="human-readable vault status")
     s.set_defaults(fn=cmd_status)

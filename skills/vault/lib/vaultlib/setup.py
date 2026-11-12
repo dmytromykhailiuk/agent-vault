@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,6 +64,64 @@ def claude_home() -> Path:
 
 def codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser()
+
+
+VLOOP_NAME = "agent-verify-loop"
+
+
+def _probe_vloop(cli: Path):
+    """(found, rejected): found is the contract dict; rejected means the CLI ran and refused `version`, which only a
+    pre-contract install does. A hang or crash is neither."""
+    try:
+        r = subprocess.run([str(cli), "version", "--json"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None, False
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        return None, r.returncode > 0
+    if not isinstance(data, dict) or data.get("name") != VLOOP_NAME:
+        return None, False
+    try:
+        contract = int(data.get("contract"))
+    except (TypeError, ValueError):
+        return None, False
+    return {"cli": str(cli), "version": str(data.get("version") or ""), "contract": contract}, False
+
+
+def _executable(p: Path) -> bool:
+    return p.is_file() and os.access(p, os.X_OK)
+
+
+def find_vloop():
+    """The agent-verify-loop CLI as {"cli", "version", "contract"}, or None. Optional integration."""
+    import shutil
+    rel = Path("skills") / "verify-loop" / "bin" / "vloop"
+    env = os.environ.get("VLOOP_CLI")
+    cands = [Path(env).expanduser()] if env else []
+    on_path = shutil.which("vloop")
+    if on_path:
+        cands.append(Path(on_path))
+    claude, codex = claude_home(), codex_home()
+    cache = sorted(
+        (p for p in (claude / "plugins" / "cache").glob("*/agent-verify-loop/*/" + rel.as_posix()) if p.is_file()),
+        key=lambda p: p.stat().st_mtime, reverse=True)
+    cands += cache
+    if (codex / "plugins").is_dir():
+        cands += sorted(p for p in (codex / "plugins").glob("**/" + rel.as_posix()) if p.is_file())
+    legacy = claude / rel
+    cands += [legacy, Path("~/.agents").expanduser() / rel]
+    seen = set()
+    for cand in cands:
+        if str(cand) in seen or not _executable(cand):
+            continue
+        seen.add(str(cand))
+        found, rejected = _probe_vloop(cand)
+        if found:
+            return found
+        if cand == legacy and rejected:
+            return {"cli": str(cand), "version": "", "contract": 0}
+    return None
 
 
 def base_dir(agent: str, scope: str, repo_root) -> Path:
@@ -413,6 +472,8 @@ def cmd_doctor(args) -> int:
     print(f"Vault:    {_tilde(ctx.project_dir) if ctx.project_dir else '-'}  "
           f"(setting '{ctx.dir_setting}' from {ctx.dir_source}; "
           f"{'initialized' if ctx.initialized else 'not initialized'})")
+    vloop = find_vloop()
+    print(f"vloop:    {vloop['cli'] + ' (contract ' + str(vloop['contract']) + ')' if vloop else 'not found (optional: agent-verify-loop)'}")
     problems = 0
     for agent in AGENTS:
         print(f"{agent}:")

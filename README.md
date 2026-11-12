@@ -10,7 +10,7 @@ context stays small:
 | Piece | What it does |
 |---|---|
 | `vault` skill | Dispatcher: search, remember, update, lint, review, init, status, graph, setup, doctor. |
-| `vault-keeper` agent | Runs every operation that answers or writes: search, remember, update, lint, init phases (and the optional verify-loop retro). |
+| `vault-keeper` agent | Runs every operation that answers or writes: search, remember, update, lint, init phases (and the optional agent-verify-loop retro). |
 | `vault-reviewer` agent | Read-only audit: checks note claims against code, measures search hit@1/hit@3, finds coverage gaps. |
 | SessionStart hook | `vault context --hook`: injects the project's summary, sync state and the usage rules at session start. |
 | `vault` CLI | Python 3.10+, no dependencies: resolve, search, list, affected, lint, coverage, commit, graph, tree, lessons, setup, doctor. |
@@ -112,7 +112,7 @@ is a **shared** vault: one git repo and one Obsidian vault for every project. An
 <vault_dir>/
   index.md  glossary.md  log.md  _meta.json
   features/  guides/  problems/  decisions/  modules/
-  lessons/  retros/          # used by the optional verify-loop retro
+  lessons/  retros/          # used by the optional agent-verify-loop retro
 ```
 
 The full note format is in [`skills/vault/reference/schema.md`](skills/vault/reference/schema.md); each operation's
@@ -123,6 +123,22 @@ procedure is in [`skills/vault/ops/`](skills/vault/ops).
 The CLI reads `CLAUDE_VAULT_DIR` and `CLAUDE_VAULT_HARNESS_DIR`, so an existing vault (e.g. `~/claude-vault/{project}`)
 resolves unchanged. Remove the old SessionStart hook and agent before installing the plugin, or run `vault doctor`
 afterwards: it warns when two hooks inject the context.
+
+## Integration with agent-verify-loop
+
+agent-verify-loop (`vloop`) is optional. Both CLIs answer `version --json` with a `contract` number (currently 1) so
+each can check the other.
+
+- **Discovery.** `vault resolve` and `vault doctor` report `vloop`: env `VLOOP_CLI`, then `vloop` on `PATH`, then the
+  Claude plugin cache, the Codex plugin cache, and the skill dirs (`~/.claude/skills/verify-loop`,
+  `~/.agents/skills/verify-loop`). A candidate counts only when `vloop version --json` names `agent-verify-loop`; a
+  legacy install without a `version` command is accepted as contract 0. vloop finds this CLI the same way
+  (env `AGENT_VAULT_CLI`, `PATH`, plugin caches, skill dirs).
+- **What vloop uses.** `vault resolve`, `vault lessons --format json`, `vault covering --format json`,
+  `vault proposal`, and retros through the `vault-keeper` agent plus `ops/retro.md`. The retro task file carries
+  `vloop:`, `vault_cli:` and `ops:` lines.
+- **When one is absent.** Without vloop the vault works unchanged (retro ledger baselines are skipped). Without the
+  vault, vloop skips lessons and retro notes.
 
 ## Development
 

@@ -31,7 +31,7 @@ path the skill was loaded from). `$V` is `<skill_dir>/bin/vault` as an absolute 
 | `vault lint` | Dispatch `lint` | vault-keeper | sonnet | background |
 | `vault review [focus]` | Dispatch `qa` | vault-reviewer | sonnet | background |
 | `vault init [--dir <path\|template>] [--save local\|project\|user] [--depth full\|lite]` | Read `<skill_dir>/ops/init.md` and orchestrate it (several agents) | vault-keeper | opus/sonnet | background |
-| retro (from verify-loop) | Dispatch `retro` with the task file verify-loop gives you | vault-keeper | sonnet | background |
+| retro (from agent-verify-loop (vloop), optional) | Dispatch `retro` with the task file vloop gives you | vault-keeper | sonnet | background |
 
 Invocation: `/vault <op>` in Claude Code, `$vault <op>` in Codex, or plain words. With no subcommand, infer it:
 - a question about the project → search;
