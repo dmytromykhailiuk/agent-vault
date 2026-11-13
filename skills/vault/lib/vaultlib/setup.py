@@ -15,7 +15,7 @@ from . import frontmatter as fmlib
 
 AGENTS = ("claude", "codex")
 PARTS = ("agents", "hook", "perms")
-HOOK_MATCHER = "^(startup|clear|compact)$"
+HOOK_MATCHER = "^(startup|resume|clear|compact)$"
 HOOK_TIMEOUT = 5
 HOOK_CMD_RE = re.compile(r"/bin/vault'?\"?\s+context\s+--hook\b")
 
