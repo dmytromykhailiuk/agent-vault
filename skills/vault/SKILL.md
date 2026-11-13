@@ -82,9 +82,15 @@ Operation: <op>
 Repo root: <repo_root>
 Skill dir: <skill_dir>
 CLI: <cli>
+Vault dir setting: <dir_setting>
+[Project: <slug>]
 <inputs>
 Follow <skill_dir>/ops/<op>.md (after reading <skill_dir>/reference/schema.md).
 ```
+
+`Vault dir setting:` is the `dir_setting` that `$V resolve` printed (e.g. `~/claude-vault/{project}`), never the
+resolved `vault_dir`: the setting keeps a shared vault shared. Add the `Project:` line only when step 1 used
+`--project`.
 
 Inputs by operation:
 - **search**:
@@ -107,9 +113,21 @@ Inputs by operation:
 Set the agent's working directory to `<repo_root>` where the agent supports it; otherwise the task's `Repo root:`
 line tells it where to run.
 
-- **Claude Code**: the Agent tool with `subagent_type` `vault-keeper` or `vault-reviewer` (installed from the plugin
-  they appear as `agent-vault:vault-keeper` / `agent-vault:vault-reviewer`; use whichever is listed), the model from
-  the table and `prompt: <task>`. Background ops use `run_in_background: true`; you are notified when they finish, so
+- **Claude Code inside Herdr, main session** (`HERDR_ENV=1`, `HERDR_AGENT_DEPTH` empty or `0`, and the herdr-agent CLI
+  is found: `$HERDR_AGENT`, else `herdr-agent` on `PATH`, else `~/.claude/skills/herdr-agent/bin/herdr-agent`; if
+  none, use the next bullet): write the task to a file and, with the cwd set to `<repo_root>`, run one command:
+  `"$HERDR_AGENT" run <role> --agent <listed agent> --model <model> --prompt-file <task file>` when `HERDR_AGENT` is
+  set, otherwise the same command with `<herdr-agent>` written literally as its resolved absolute path. No `;`, `&&`
+  or variable prefix in front of it. `<role>` is `vault-keeper` or `vault-reviewer`; `<listed agent>` is the agent
+  name as the agent list shows it (`agent-vault:vault-keeper` for a plugin install, `vault-keeper` otherwise).
+  Add `--read-only` for `review` always, and for `search` only when the session is in plan mode; outside plan mode
+  `search` runs without it so its file-back step can edit notes. Run background ops with `run_in_background: true`.
+  Exit codes: `0` use stdout; `3` blocked, show the dialog to the user and ask, never approve it; `4` timeout,
+  `<herdr-agent> wait <id> --close` later; `5` dead and `6` no result, report it; `7` api error, follow the printed
+  hint or `<herdr-agent> send <id> --prompt continue --wait --close`.
+- **Claude Code** (elsewhere): the Agent tool with `subagent_type` `vault-keeper` or `vault-reviewer` (installed from
+  the plugin they appear as `agent-vault:vault-keeper` / `agent-vault:vault-reviewer`; use whichever is listed), the
+  model from the table and `prompt: <task>`. Background ops use `run_in_background: true`; you are notified when they finish, so
   don't poll.
 - **Codex**: spawn the custom agent named `vault-keeper` or `vault-reviewer` with the task as its message. Wait for
   foreground ops; let background ops run while you continue.
@@ -123,7 +141,8 @@ Never approve a sub-agent's permission prompt on the user's behalf; show it and 
 
 ## 4. Relay
 
-- **search**: use the answer in your work. Tell the user the gist plus the source notes when they asked the question
+- **search**: if the answer contains `Vault gap:` lines (a plan-mode search could not file back), keep them and
+  dispatch `remember` for them after leaving plan mode. Use the answer in your work. Tell the user the gist plus the source notes when they asked the question
   themselves. Treat `Confidence: low` or stale sources as hints, and verify in code before relying on them.
 - **remember, update, lint, init**: summarize the agent's report in 2–5 lines. Don't paste long outputs.
 - **review**: give the scores (claim accuracy, search hit@1/hit@3), the wrong claims and the top fixes. Offer

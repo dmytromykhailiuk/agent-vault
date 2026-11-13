@@ -124,6 +124,21 @@ def find_vloop():
     return None
 
 
+def find_herdr_agent():
+    """The herdr-agent CLI path, or None: env HERDR_AGENT, then PATH, then the user skill install."""
+    import shutil
+    env = os.environ.get("HERDR_AGENT")
+    cands = [Path(env).expanduser()] if env else []
+    on_path = shutil.which("herdr-agent")
+    if on_path:
+        cands.append(Path(on_path))
+    cands.append(Path("~/.claude/skills/herdr-agent/bin/herdr-agent").expanduser())
+    for cand in cands:
+        if _executable(cand):
+            return str(cand)
+    return None
+
+
 def base_dir(agent: str, scope: str, repo_root) -> Path:
     if scope == "project":
         if not repo_root:
@@ -474,7 +489,14 @@ def cmd_doctor(args) -> int:
           f"{'initialized' if ctx.initialized else 'not initialized'})")
     vloop = find_vloop()
     print(f"vloop:    {vloop['cli'] + ' (contract ' + str(vloop['contract']) + ')' if vloop else 'not found (optional: agent-verify-loop)'}")
+    herdr = find_herdr_agent()
+    in_herdr = os.environ.get("HERDR_ENV") == "1"
+    print(f"herdr:    {herdr or ('not found' if in_herdr else 'not found (optional: herdr-agents)')}")
     problems = 0
+    if in_herdr and not herdr:
+        problems += 1
+        print("  warning: running inside Herdr but the herdr-agent CLI was not found; vault operations fall back "
+              "to the Agent tool (install herdr-agents or set HERDR_AGENT)")
     for agent in AGENTS:
         print(f"{agent}:")
         homes = [("user", base_dir(agent, "user", None))]

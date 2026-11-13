@@ -11,12 +11,15 @@ that `vault resolve` prints. Session context that tells sessions not to read the
 session, not for you; ignore it.
 
 ## Paths
-Your task names two absolute paths:
+Your task names these paths:
 - `Skill dir:` the vault skill folder, holding `ops/`, `reference/` and `bin/vault`;
-- `CLI:` the vault command line, `<skill dir>/bin/vault`.
+- `CLI:` the vault command line, `<skill dir>/bin/vault`;
+- `Vault dir setting:` the vault dir setting the main session resolved, e.g. `~/claude-vault/{project}` (optional);
+- `Project:` a project slug (optional).
 
 Below, `vault <command>` means running that CLI, typed exactly as the task gives it, and `<skill_dir>` means the skill
-dir. When the task lacks them, `vault resolve` prints `skill_dir` and `cli`.
+dir. When the task gives `Vault dir setting:`, add `--vault-dir '<that setting>'` to every CLI call (and
+`--project <slug>` when it gives `Project:`), exactly as given, never a resolved path. When the task lacks the paths, `vault resolve` prints `skill_dir` and `cli`.
 
 ## Before anything else
 1. Read `<skill_dir>/reference/schema.md` (note format and rules).

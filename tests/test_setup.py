@@ -558,6 +558,70 @@ class Doctor(SetupBase):
         self.assertIn("warning", out)
 
 
+class DoctorHerdr(SetupBase):
+    def setUp(self):
+        super().setUp()
+        self.fake_home = self.tmp / "home"
+        self.fake_home.mkdir()
+        os.environ["HOME"] = str(self.fake_home)
+        self._path = os.environ["PATH"]
+        os.environ["PATH"] = str(self.tmp / "empty-bin")
+
+    def tearDown(self):
+        os.environ["PATH"] = self._path
+        super().tearDown()
+
+    def fake_cli(self, path):
+        write(path, "#!/bin/sh\n")
+        path.chmod(0o755)
+        return path
+
+    def test_inside_herdr_without_cli_warns(self):
+        os.environ["HERDR_ENV"] = "1"
+        out = self.run_cli("doctor", expect=1)
+        self.assertIn("warning: running inside Herdr", out)
+        self.assertIn("herdr:    not found", out)
+
+    def test_outside_herdr_without_cli_is_ok(self):
+        out = self.run_cli("doctor")
+        self.assertNotIn("warning", out)
+        self.assertIn("optional: herdr-agents", out)
+
+    def test_cli_from_env_home_or_path_is_found(self):
+        os.environ["HERDR_ENV"] = "1"
+        env_cli = self.fake_cli(self.tmp / "custom" / "herdr-agent")
+        os.environ["HERDR_AGENT"] = str(env_cli)
+        out = self.run_cli("doctor")
+        self.assertNotIn("warning", out)
+        self.assertIn(f"herdr:    {env_cli}", out)
+        os.environ.pop("HERDR_AGENT")
+        home_cli = self.fake_cli(self.fake_home / ".claude/skills/herdr-agent/bin/herdr-agent")
+        self.assertEqual(setup.find_herdr_agent(), str(home_cli))
+        path_cli = self.fake_cli(self.tmp / "empty-bin" / "herdr-agent")
+        self.assertEqual(setup.find_herdr_agent(), str(path_cli))
+
+    def test_dispatch_docs_carry_herdr_branch_and_vault_dir_setting(self):
+        skill = (SKILL / "SKILL.md").read_text()
+        self.assertIn("Vault dir setting: <dir_setting>", skill)
+        self.assertNotIn("Vault dir: <vault_dir>", skill)
+        self.assertIn("HERDR_AGENT_DEPTH", skill)
+        self.assertIn('"$HERDR_AGENT" run <role> --agent <listed agent>', skill)
+        self.assertNotIn('"$HA"', skill)
+        self.assertNotIn("run <agent> --agent <agent>", skill)
+        self.assertIn("only when the session is in plan mode", skill)
+        self.assertIn("Vault gap:", skill)
+        for name in (KEEPER, "vault-reviewer"):
+            agent = (SKILL / "agents" / f"{name}.md").read_text()
+            self.assertIn("--vault-dir '<that setting>'", agent)
+            self.assertNotIn("--vault-dir <that dir>", agent)
+            self.assertEqual((ROOT / "agents" / f"{name}.md").read_text(), agent)
+
+    def test_search_op_degrades_to_vault_gap_lines(self):
+        search = (SKILL / "ops" / "search.md").read_text()
+        self.assertIn("Edit/Write are unavailable", search)
+        self.assertIn("Vault gap: <one line>", search)
+
+
 class HookOutput(SetupBase):
     def run_hook(self, payload):
         buf = io.StringIO()
@@ -790,8 +854,6 @@ class Packaging(unittest.TestCase):
                 continue
             if rel == "tests/test_setup.py":
                 continue
-            if "herd" "r" in text.lower():
-                bad.append(f"{rel}: herdr")
             if "~/.claude/skills/" "vault" in text and rel != "README.md":
                 bad.append(f"{rel}: ~/.claude/skills/vault")
         self.assertEqual(bad, [])

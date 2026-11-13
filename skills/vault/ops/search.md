@@ -26,6 +26,8 @@ When the vault had a gap, fill it.
    the wrong claims, and link it. Then:
    `vault commit -m "search: <topic>" --stamp <notes you fully re-checked against code>`.
    Skip this when nothing new was learned.
+   When Edit/Write are unavailable (read-only run), edit nothing: output one `Vault gap: <one line>` line per item
+   instead and set `Vault updated: no`.
 
 ## Final message (≤ 300 words)
 ```
@@ -33,4 +35,5 @@ Answer: <direct answer; concrete paths + symbols; steps if it's a how-to>
 Sources: <vault note paths>; code checked: <files, or "none">
 Confidence: high | medium | low — <why: stale notes, inferred decisions, gaps>
 Vault updated: <note paths changed, or "no">
+[Vault gap: <one line>]  (only when file-back was impossible)
 ```

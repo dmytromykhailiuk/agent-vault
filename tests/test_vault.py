@@ -50,6 +50,9 @@ class VaultTestCase(unittest.TestCase):
         os.environ.pop("CLAUDE_VAULT_DIR", None)
         os.environ.pop("AGENT_VAULT_DIR", None)
         os.environ.pop("AGENT_VAULT_HARNESS_DIR", None)
+        for k in ("HERDR_ENV", "HERDR_AGENT"):
+            self._env.setdefault(k, os.environ.get(k))
+            os.environ.pop(k, None)
         os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "xdg-config")
         os.environ["XDG_DATA_HOME"] = str(self.tmp / "xdg-data")
         os.environ["CODEX_HOME"] = str(self.tmp / "codex-home")
@@ -480,6 +483,17 @@ class TestVaultDir(VaultTestCase):
         self.run_cli("resolve", "--create", "--vault-dir", "other", "--save", "project")
         self.assertEqual(json.loads((self.repo / ".agent-vault.json").read_text()), {"vault_dir": "other"})
 
+    def test_setting_form_keeps_shared_layout_and_resolved_path_does_not(self):
+        os.environ.pop("VAULT_ROOT", None)
+        tmpl = str(self.tmp / "kbs/{project}")
+        base = json.loads(self.run_cli("resolve", "--create", "--vault-dir", tmpl))
+        via_setting = json.loads(self.run_cli("resolve", "--vault-dir", base["dir_setting"]))
+        for key in ("layout", "link_prefix", "vault_git", "vault_dir"):
+            self.assertEqual(via_setting[key], base[key])
+        self.assertEqual(base["layout"], "shared")
+        via_path = json.loads(self.run_cli("resolve", "--vault-dir", base["vault_dir"]))
+        self.assertEqual(via_path["layout"], "repo")
+
     def test_project_in_middle_of_template(self):
         tmpl = str(self.tmp / "kb/{project}/notes")
         p = self.tmp / "kb/demo/notes"
@@ -712,8 +726,9 @@ class TestLessonsAndRetros(VaultTestCase):
         self.assertNotIn("Promoted rule.", block)
         harness_lines = lines[lines.index("Harness lessons:") + 1:-1]
         self.assertEqual(harness_lines, ["- Harness rule 0. (×9)", "- Harness rule 1. (×8)", "- Harness rule 2. (×7)"])
-        self.assertEqual(lines[-1], "Pending: 1 harness/repo change proposal(s) await your approval → "
-                                    "`vault lessons --proposals`, then `vault proposal accept|reject <note>`")
+        self.assertEqual(lines[-1], f"Pending: 1 harness/repo change proposal(s) await your approval → "
+                                    f"`{BIN} lessons --proposals`, then `{BIN} proposal accept|reject <note>`")
+        self.assertTrue(Path(str(BIN)).is_absolute())
         # Huge index summary: the total still fits.
         idx = self.p / "index.md"
         idx.write_text(fm.set_field(idx.read_text(), "summary", "y" * 7000))

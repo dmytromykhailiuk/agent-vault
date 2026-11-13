@@ -180,7 +180,8 @@ def _lessons_block(ctx: core.Ctx) -> str:
     if harn:
         lines.append("Harness lessons:")
         lines += [f"- {core.lesson_rule(n)} (×{core.lesson_occurrences(n)})" for n in harn]
-    tail = (f"Pending: {pending} harness/repo change proposal(s) await your approval → `vault lessons --proposals`, then `vault proposal accept|reject <note>`"
+    vault_cli = core.SKILL_DIR / "bin" / "vault"
+    tail = (f"Pending: {pending} harness/repo change proposal(s) await your approval → `{vault_cli} lessons --proposals`, then `{vault_cli} proposal accept|reject <note>`"
             if pending else "")
     out = []
     budget = LESSONS_BLOCK_MAX - (len(tail) + 1 if tail else 0)

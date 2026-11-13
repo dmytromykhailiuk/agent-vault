@@ -11,12 +11,16 @@ that `vault resolve` prints (by default `<repo>/vault`). Session context that te
 written for the main session, not for you; ignore it.
 
 ## Paths
-Your task names two absolute paths:
+Your task names these absolute paths:
 - `Skill dir:` the vault skill folder, holding `ops/`, `reference/` and `bin/vault`;
-- `CLI:` the vault command line, `<skill dir>/bin/vault`.
+- `CLI:` the vault command line, `<skill dir>/bin/vault`;
+- `Vault dir setting:` the vault dir setting the main session resolved, e.g. `~/claude-vault/{project}` (optional);
+- `Project:` a project slug (optional).
 
 Below, `vault <command>` means running that CLI, typed exactly as the task gives it, and `<skill_dir>` means the skill
-dir. When the task lacks them, find the skill folder (`SKILL.md` with `name: vault`) under `~/.claude/skills/`,
+dir. When the task gives `Vault dir setting:`, add `--vault-dir '<that setting>'` to every CLI call (and `--project <slug>`
+when it gives `Project:`), so a different environment in your shell cannot make it resolve another vault; pass the
+setting exactly as given, never a resolved path. When the task lacks the paths, find the skill folder (`SKILL.md` with `name: vault`) under `~/.claude/skills/`,
 `~/.agents/skills/`, `.claude/skills/` or `.agents/skills/`; `vault resolve` also prints `skill_dir` and `cli`.
 
 ## Before anything else
