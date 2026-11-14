@@ -28,7 +28,8 @@ key of `vault resolve` (when not null), otherwise skip the ledger baselines and 
 3. **Assess** what went well and what went badly across:
    - **outcome quality**: bugs caught before the user saw them; issues that escaped (found later, by the user);
    - **efficiency**: tokens per phase vs the ledger medians; waste signals (re-reads, large outputs, repeated
-     failing commands, exploration before asking the vault);
+     failing commands, exploration before asking the vault). Times are wall / active / idle (judge effort by active
+     time); `cost_source` says whether a number comes from agent-cost, vloop's own accounting or `claude -p` (triage);
    - **process**: iterations and their root causes, ignored gate blocks, disputes, findings raised late or
      downgraded;
    - **triage calibration**: QA scope vs what QA found or missed (browser QA that found nothing, a bug that checks
