@@ -28,8 +28,10 @@ key of `vault resolve` (when not null), otherwise skip the ledger baselines and 
 3. **Assess** what went well and what went badly across:
    - **outcome quality**: bugs caught before the user saw them; issues that escaped (found later, by the user);
    - **efficiency**: tokens per phase vs the ledger medians; waste signals (re-reads, large outputs, repeated
-     failing commands, exploration before asking the vault). Times are wall / active / idle (judge effort by active
-     time); `cost_source` says whether a number comes from agent-cost, vloop's own accounting or `claude -p` (triage);
+     failing commands, exploration before asking the vault). Times are wall / active / waiting / idle (wall = active +
+     waiting + idle): judge effort and speed by active time, treat waiting as orchestration wait on sub-agents and idle
+     as user or away time, never as slowness. `cost_source` (per agent and main; `cost_provider` at the top) says
+     whether numbers come from `agent-cost`, `own` (vloop's transcript accounting) or `claude-p` (triage);
    - **process**: iterations and their root causes, ignored gate blocks, disputes, findings raised late or
      downgraded;
    - **triage calibration**: QA scope vs what QA found or missed (browser QA that found nothing, a bug that checks
@@ -52,8 +54,8 @@ key of `vault resolve` (when not null), otherwise skip the ledger baselines and 
    - (c) **harness lesson** (auto) — how the coding agents work for this user, not tied to one repo → `_harness/lessons/`,
      `scope: harness`;
    - (d) **harness or repo file change** — CLAUDE.md / AGENTS.md, a skill, an agent, hooks, settings, the repo's
-     `.claude/verify.json` or a run recipe → a proposal inside the lesson note: `proposal_status: open`,
-     `proposal_kind: harness-change | repo-change`, `proposal_target: <path>`, and under `## Proposed change` the
+     `.agent-verify-loop.json` (old `.claude/verify.json`) or a run recipe → a proposal inside the lesson note:
+     `proposal_status: open`, `proposal_kind: harness-change | repo-change`, `proposal_target: <path>`, and under `## Proposed change` the
      target path, the exact unified diff and a one-line rationale. **Never edit those files yourself.**
 5. **Dedupe and count.** `vault search --type lesson "<terms>"` in the project and with `--project _harness`.
    - Match (same failure pattern) → `occurrences += 1`, `last_seen: <retro date>`, add the evidence link to

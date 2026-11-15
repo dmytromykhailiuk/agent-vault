@@ -218,9 +218,9 @@ def _strip_hooks(data: dict) -> int:
 def _add_hook(data: dict) -> None:
     hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
     groups = hooks.get("SessionStart") if isinstance(hooks.get("SessionStart"), list) else []
-    ours = [h for grp in groups if isinstance(grp, dict) and isinstance(grp.get("hooks"), list)
+    ours = [(grp.get("matcher"), h) for grp in groups if isinstance(grp, dict) and isinstance(grp.get("hooks"), list)
             for h in grp["hooks"] if _is_ours(h)]
-    if len(ours) == 1 and ours[0].get("command") == hook_command():
+    if len(ours) == 1 and ours[0][0] == HOOK_MATCHER and ours[0][1].get("command") == hook_command():
         return
     _strip_hooks(data)
     hooks = data.setdefault("hooks", {})

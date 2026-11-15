@@ -26,6 +26,32 @@ def skip_agent(name) -> bool:
     return str(name or "").rsplit(":", 1)[-1].startswith(SKIP_AGENT_PREFIXES)
 
 
+VAULT_CONTEXT_MARKERS = ("## Project knowledge vault:", "Knowledge vault: none for this repository yet",
+                         "Lessons from past retros (follow them):")
+
+
+def _resumed_transcript(path) -> tuple[str, str]:
+    agent, injected = "", ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"agent-setting"' not in line and '"hook_additional_context"' not in line:
+                    continue
+                with contextlib.suppress(ValueError):
+                    rec = json.loads(line)
+                    if rec.get("type") == "agent-setting":
+                        agent = str(rec.get("agentSetting") or "")
+                    att = rec.get("attachment") or {}
+                    if att.get("type") == "hook_additional_context":
+                        content = att.get("content")
+                        for c in content if isinstance(content, list) else [content]:
+                            if isinstance(c, str) and any(m in c for m in VAULT_CONTEXT_MARKERS):
+                                injected = c
+    except (OSError, TypeError):
+        pass
+    return agent, injected
+
+
 def _ctx(args) -> core.Ctx:
     return core.resolve(getattr(args, "cwd", None), getattr(args, "project", None), getattr(args, "vault_dir", None))
 
@@ -223,9 +249,16 @@ def cmd_context(args) -> int:
                 data = json.loads(raw)
         if skip_agent(data.get("agent_type")):
             return 0
+        injected = ""
+        if data.get("source") == "resume" and data.get("transcript_path"):
+            # Herdr's native resume relaunches `claude --resume` without `--agent`, so agent_type is missing there;
+            # the transcript still names the agent and holds the context the session already got.
+            agent, injected = _resumed_transcript(data["transcript_path"])
+            if skip_agent(agent):
+                return 0
         ctx = core.resolve(data.get("cwd") or args.cwd, vault_dir=args.vault_dir)
         text = _context_text(ctx)
-        if not text:
+        if not text or (injected and text in injected):
             return 0
         if args.hook:
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))

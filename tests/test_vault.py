@@ -369,6 +369,43 @@ class TestHookAndTree(VaultTestCase):
         write(self.vault / "demo/_meta.json", "{broken")
         self.assertEqual(self.hook(json.dumps({"cwd": str(self.repo)})).count("additionalContext"), 1)
 
+    def test_resume_hook(self):
+        self.init_project()
+        self.run_cli("commit", "-m", "init", "--stamp-all", "--synced")
+        ctx = json.loads(self.hook(json.dumps({"cwd": str(self.repo)})))["hookSpecificOutput"]["additionalContext"]
+        transcript = self.tmp / "t.jsonl"
+
+        def resume(*records):
+            transcript.write_text("".join(json.dumps(r) + "\n" for r in records) + "{broken\n")
+            return self.hook(json.dumps({"cwd": str(self.repo), "source": "resume",
+                                         "transcript_path": str(transcript)}))
+
+        injected = {"attachment": {"type": "hook_additional_context", "content": [ctx]}}
+        self.assertEqual(resume(injected), "")
+        stale = {"attachment": {"type": "hook_additional_context", "content": ["## Project knowledge vault: old"]}}
+        self.assertIn("additionalContext", resume(stale))
+        self.assertIn("additionalContext", resume())
+        for agent in ("vault-keeper", "agent-vault:vault-keeper", "agent-verify-loop:verify-qa"):
+            self.assertEqual(resume({"type": "agent-setting", "agentSetting": agent}), "")
+        self.assertIn("additionalContext", resume({"type": "agent-setting", "agentSetting": "Explore"}))
+        other = {"attachment": {"type": "hook_additional_context", "content": ["orchestrator rules"]}}
+        self.assertEqual(resume(injected, other), "")
+        self.assertIn("additionalContext", resume(injected, stale))
+        self.assertEqual(resume(stale, injected), "")
+        self.assertIn("additionalContext", resume(injected, stale, other))
+        header = [{"type": "permission-mode", "permissionMode": "default"}, {"type": "summary", "summary": "x"}]
+        self.assertEqual(resume(*header, {"type": "agent-setting", "agentSetting": "agent-vault:vault-keeper"},
+                                stale), "")
+        rollout = [{"timestamp": "2026-11-11T10:00:00.000Z", "type": "session_meta",
+                    "payload": {"id": "s", "cwd": str(self.repo), "originator": "codex_cli_rs"}},
+                   {"timestamp": "2026-11-11T10:00:01.000Z", "type": "response_item",
+                    "payload": {"type": "message", "role": "developer",
+                                "content": [{"type": "input_text", "text": ctx}]}}]
+        self.assertIn("additionalContext", resume(*rollout))
+        missing = self.hook(json.dumps({"cwd": str(self.repo), "source": "resume",
+                                        "transcript_path": str(self.tmp / "missing.jsonl")}))
+        self.assertIn("additionalContext", missing)
+
     def test_tree_when_on_task_branch(self):
         self.init_project()
         self.run_cli("commit", "-m", "init", "--stamp-all", "--synced")

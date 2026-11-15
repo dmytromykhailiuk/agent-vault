@@ -231,6 +231,17 @@ class SetupClaude(SetupBase):
         self.assertEqual((self.claude / "settings.json").read_text(), before)
         self.assertEqual(setup.count_hooks(self.claude / "settings.json"), 1)
 
+    def test_old_matcher_is_upgraded(self):
+        self.run_cli("setup", "--agent", "claude")
+        f = self.claude / "settings.json"
+        s = json.loads(f.read_text())
+        s["hooks"]["SessionStart"][0]["matcher"] = "^(startup|clear|compact)$"
+        f.write_text(json.dumps(s))
+        self.run_cli("setup", "--agent", "claude")
+        groups = self.settings()["hooks"]["SessionStart"]
+        self.assertEqual([g["matcher"] for g in groups], [setup.HOOK_MATCHER])
+        self.assertEqual(setup.count_hooks(f), 1)
+
     def bundled(self, name=KEEPER):
         return (SKILL / "agents" / f"{name}.md").read_text()
 
