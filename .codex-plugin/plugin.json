@@ -1,6 +1,6 @@
 {
   "name": "agent-vault",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Per-project knowledge vault for coding agents: the vault skill and a session-start hook. Install the agents with `vault setup --agent codex --only agents`.",
   "author": {
     "name": "dmytromykhailiuk"

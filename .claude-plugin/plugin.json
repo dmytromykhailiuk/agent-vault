@@ -1,6 +1,6 @@
 {
   "name": "agent-vault",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Per-project knowledge vault for coding agents: a vault skill, keeper and reviewer agents, and a session-start hook.",
   "author": {
     "name": "dmytromykhailiuk"
