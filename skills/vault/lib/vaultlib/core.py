@@ -14,11 +14,14 @@ from pathlib import Path
 from . import frontmatter as fmlib
 from . import gitutil as g
 
-SCHEMA = 1
+VAULT_SCHEMA = 2
+SCHEMA = VAULT_SCHEMA
 SKILL_DIR = Path(__file__).resolve().parent.parent.parent
-VERSION = "0.2.0"
-CONTRACT = 1
-CONTENT_TYPES = ("feature", "guide", "problem", "decision", "module", "lesson", "retro")
+VERSION = "0.3.0"
+CONTRACT = 2
+CONTRACTS = (1, 2)
+CONTENT_TYPES = ("feature", "guide", "problem", "decision", "module", "lesson", "retro", "convention", "architecture",
+                 "adr", "proposal")
 FOLDERS = {
     "feature": "features",
     "guide": "guides",
@@ -27,8 +30,13 @@ FOLDERS = {
     "module": "modules",
     "lesson": "lessons",
     "retro": "retros",
+    "convention": "conventions",
+    "architecture": "architecture",
+    "adr": "architecture/adr",
+    "proposal": "proposals",
 }
 FOLDER_TYPES = {v: k for k, v in FOLDERS.items()}
+FOLDERS_BY_DEPTH = sorted(FOLDER_TYPES, key=lambda f: (-f.count("/"), f))
 HUB_TITLES = {
     "features": "Features",
     "guides": "Guides",
@@ -37,6 +45,10 @@ HUB_TITLES = {
     "modules": "Modules",
     "lessons": "Lessons",
     "retros": "Retros",
+    "conventions": "Conventions",
+    "architecture": "Architecture (arc42)",
+    "architecture/adr": "Architecture decisions (ADR)",
+    "proposals": "Proposals",
 }
 STATUSES = {
     "project": {"active", "deprecated"},
@@ -48,6 +60,10 @@ STATUSES = {
     "decision": {"accepted", "superseded", "inferred", "proposed"},
     "lesson": {"active", "promoted", "retired"},
     "retro": {"recorded"},
+    "convention": {"active", "proposed", "inferred", "retired"},
+    "architecture": {"active", "proposed", "inferred"},
+    "adr": {"accepted", "superseded", "proposed", "inferred"},
+    "proposal": {"open", "applied", "rejected"},
 }
 VALID_TYPES = set(STATUSES) | {"hub", "log"}
 # Token budgets for the note body (chars / 4).
@@ -61,13 +77,31 @@ BUDGETS = {
     "glossary": 2500,
     "lesson": 500,
     "retro": 800,
+    "convention": 500,
+    "architecture": 1500,
+    "adr": 1000,
+    "proposal": 2500,
 }
+CONVENTION_LEVELS = ("must", "should")
+CONVENTION_SOURCES = ("user", "inferred", "retro", "init-confirmed")
+ARC42_SECTIONS = ("goals", "constraints", "context", "building-blocks", "runtime", "deployment", "crosscutting",
+                  "quality", "risks")
+ARC42_DIAGRAMS = {"context": "C4Context", "building-blocks": "C4Container", "runtime": "sequenceDiagram",
+                  "deployment": "C4Deployment"}
+ARC42_ITEMS = {"constraints": "C", "crosscutting": "P"}
+GUARDRAIL_STATUSES = {"convention": ("active", "inferred"), "architecture": ("active", "inferred"),
+                      "adr": ("accepted",)}
+GUARDRAILS_BUDGET = 1800
 # Lesson / retro field values (lint warns on others).
 LESSON_SCOPES = ("project", "harness")
 LESSON_CATEGORIES = ("efficiency", "correctness", "process", "tooling", "environment", "communication")
 LESSON_AUDIENCES = ("implementer", "orchestrator", "triage", "reviewer", "qa", "retro")
 PROPOSAL_STATUSES = ("none", "open", "applied", "rejected")
-PROPOSAL_KINDS = ("none", "rule-promotion", "harness-change", "repo-change")
+PROPOSAL_KINDS = ("none", "rule-promotion", "harness-change", "repo-change", "adr-new", "convention-new",
+                  "convention-change", "sad-change")
+NOTE_PROPOSAL_KINDS = ("adr-new", "convention-new")
+CHANGE_PROPOSAL_KINDS = ("convention-change", "sad-change")
+PROPOSAL_NEEDS_REBASE = 3
 RETRO_OUTCOMES = ("passed", "accepted", "abandoned", "skipped")
 STALE_LESSON_DAYS = 90
 DEFAULT_STALE_IGNORE = [
@@ -139,9 +173,8 @@ class Note:
             return "hub"
         if len(parts) == 1:
             return {"index.md": "project", "glossary.md": "glossary", "log.md": "log"}.get(self.name, "note")
-        if parts[0] in FOLDER_TYPES:
-            return FOLDER_TYPES[parts[0]]
-        return "note"
+        folder = note_folder(self.prel or self.rel)
+        return FOLDER_TYPES[folder] if folder else "note"
 
     @property
     def type(self) -> str:
@@ -186,6 +219,14 @@ class Note:
     @property
     def is_content(self) -> bool:
         return self.type in CONTENT_TYPES or self.type in ("project", "glossary")
+
+
+def note_folder(prel: str) -> str | None:
+    """Deepest known folder holding `prel` (`architecture/adr` before `architecture`)."""
+    for folder in FOLDERS_BY_DEPTH:
+        if prel.startswith(folder + "/"):
+            return folder
+    return None
 
 
 def _as_list(v) -> list:
@@ -562,6 +603,20 @@ def write_meta(project_dir: Path, meta: dict) -> None:
     tmp.replace(project_dir / "_meta.json")
 
 
+def vault_schema(ctx) -> int:
+    """Schema of ctx's project from `_meta.json`; a missing or invalid field means 1."""
+    meta = ctx.meta if ctx.meta else (read_meta(ctx.project_dir) if ctx.project_dir else {})
+    try:
+        v = int(str(meta.get("schema", 1)))
+    except ValueError:
+        return 1
+    return v if v >= 1 else 1
+
+
+def needs_migration(ctx) -> bool:
+    return bool(ctx.initialized and not is_pseudo(ctx.slug) and vault_schema(ctx) < VAULT_SCHEMA)
+
+
 def list_projects(vault: Path) -> list:
     out = []
     if not vault.is_dir():
@@ -805,6 +860,7 @@ class Staleness:
         self.ignored = ignore_matcher(ctx.stale_ignore)
         self._diff: dict = {}
         self._tree = None
+        self._worktree = None
 
     @property
     def available(self) -> bool:
@@ -823,6 +879,19 @@ class Staleness:
         if self._tree is None:
             self._tree = g.ls_tree(self.root, self.target) if self.available else set()
         return self._tree
+
+    def worktree(self) -> set:
+        if self._worktree is None:
+            self._worktree = set()
+            if self.root:
+                rc, so, _ = g.git(self.root, "ls-files", "--cached", "--others", "--exclude-standard", timeout=60)
+                if rc == 0:
+                    self._worktree = {p for p in so.splitlines() if (Path(self.root) / p).exists()}
+        return self._worktree
+
+    def worktree_only(self, refs: list) -> list:
+        tree = self.worktree()
+        return [r for r in refs if any(ref_matcher(r)(p) for p in tree)]
 
     def missing_refs(self, note: Note) -> list:
         if not self.available:
@@ -1006,6 +1075,7 @@ def lint(ctx: Ctx, notes: list, all_notes: list = None) -> list:
     for n in all_notes:
         basenames.setdefault(n.name, []).append(n.rel)
     st = Staleness(ctx)
+    pending_hubs = {f"{ctx.link_prefix}{f}/_index" for f in FOLDERS.values() if (ctx.project_dir / f).is_dir()}
     inbound: dict = {n.rel: 0 for n in notes}
     alias_owner: dict = {}
     contents_cache: dict = {}
@@ -1018,6 +1088,10 @@ def lint(ctx: Ctx, notes: list, all_notes: list = None) -> list:
 
     if not any(n.type == "project" for n in notes):
         add("error", f"{ctx.link_prefix}index.md", "missing project index (L1)")
+    if needs_migration(ctx):
+        add("error", f"{ctx.link_prefix}_meta.json",
+            f"vault schema {vault_schema(ctx)} < {VAULT_SCHEMA}: needs migration (/vault migrate)")
+    sections: dict = {}
 
     for n in notes:
         t = n.type
@@ -1060,10 +1134,20 @@ def lint(ctx: Ctx, notes: list, all_notes: list = None) -> list:
             _lint_lesson(n, add)
         elif t == "retro" and str(n.fm.get("outcome", "")) not in RETRO_OUTCOMES:
             add("warn", n, f"outcome '{n.fm.get('outcome', '')}' not valid ({', '.join(RETRO_OUTCOMES)})")
+        elif t == "convention":
+            _lint_convention(n, add, st)
+        elif t == "architecture":
+            _lint_architecture(n, add, sections)
+        elif t in ("adr", "decision"):
+            _lint_adr(n, add)
+        if t != "lesson" and (t == "proposal" or n.fm.get("proposal_status") not in (None, "", "none")):
+            _lint_proposal(ctx, n, add)
 
         # links
         for target in wikilinks(n.body):
             rel, absolute = resolve_link(vault, target, basenames)
+            if rel is None and target.strip().removesuffix(".md") in pending_hubs:
+                rel, absolute = target.strip().removesuffix(".md") + ".md", True
             if rel is None:
                 add("error", n, f"broken link [[{target}]]")
             else:
@@ -1074,8 +1158,13 @@ def lint(ctx: Ctx, notes: list, all_notes: list = None) -> list:
 
         # code checks
         if st.available and n.code_refs:
-            for ref in st.missing_refs(n):
-                add("error", n, f"code_ref not found at {ctx.target}: {ref}")
+            missing = st.missing_refs(n)
+            uncommitted = set(st.worktree_only(missing))
+            for ref in missing:
+                if ref in uncommitted:
+                    add("warn", n, f"code_ref only in the working tree, not yet at {ctx.target}: {ref}")
+                else:
+                    add("error", n, f"code_ref not found at {ctx.target}: {ref}")
             s = st.state(n)
             if s["state"] == "stale":
                 files = s["changed"]
@@ -1089,7 +1178,13 @@ def lint(ctx: Ctx, notes: list, all_notes: list = None) -> list:
                 blob = ""
                 for r in exact[:30]:
                     if r not in contents_cache:
-                        contents_cache[r] = g.show(st.root, st.target, r) or ""
+                        contents_cache[r] = g.show(st.root, st.target, r)
+                        if contents_cache[r] is None and r in uncommitted:
+                            try:
+                                contents_cache[r] = (Path(st.root) / r).read_text(encoding="utf-8", errors="replace")
+                            except OSError:
+                                pass
+                        contents_cache[r] = contents_cache[r] or ""
                     blob += contents_cache[r]
                 if blob:
                     for sym in sorted(set(symbols_in(n.body))):
@@ -1106,7 +1201,9 @@ def lint(ctx: Ctx, notes: list, all_notes: list = None) -> list:
                 add("warn", n, f"symbol `{sym}` not found anywhere in the repo at {ctx.target}")
 
     for n in notes:
-        if n.type in CONTENT_TYPES and n.type != "retro" and inbound.get(n.rel, 0) == 0:
+        if n.type in ("retro", "proposal") or n.fm.get("proposal_status") == "open":
+            continue
+        if n.type in CONTENT_TYPES and inbound.get(n.rel, 0) == 0:
             add("warn", n, "orphan: no inbound links from other notes")
     return issues
 
@@ -1130,6 +1227,205 @@ def _lint_lesson(n: Note, add) -> None:
             age = None
         if age is not None and age > STALE_LESSON_DAYS:
             add("warn", n, f"stale lesson: last seen {last[:10]}; retire or confirm")
+
+
+def section_text(n: Note, heading: str) -> str:
+    """Body under `## <heading>` (case-insensitive) up to the next heading of the same or higher level."""
+    out, inside, level = [], False, 0
+    for line in n.body.splitlines():
+        m = re.match(r"^(#{1,6})\s+(.*?)\s*$", line)
+        if m:
+            if inside and len(m.group(1)) <= level:
+                break
+            if not inside and m.group(2).strip().lower() == heading.lower():
+                inside, level = True, len(m.group(1))
+                continue
+        if inside:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def section_line(n: Note, heading: str) -> str:
+    for line in section_text(n, heading).splitlines():
+        s = line.strip()
+        if s and not s.startswith("<!--"):
+            return s
+    return ""
+
+
+def convention_rule(n: Note) -> str:
+    r = n.fm.get("rule")
+    return r.strip() if isinstance(r, str) and r.strip() else (section_line(n, "rule") or n.summary or n.title)
+
+
+def convention_level(n: Note) -> str:
+    v = n.fm.get("level")
+    return v if isinstance(v, str) and v in CONVENTION_LEVELS else ""
+
+
+def scope_globs(n: Note) -> list:
+    return [s.strip() for s in _as_list(n.fm.get("scope")) if s.strip()]
+
+
+ARC42_ITEM_RE = re.compile(r"^\s*(?:[-*+]\s+)?\**([CP]-\d+)\**\s*[:.)]\**\s*(.+?)\s*$")
+
+
+def arc42_items(n: Note) -> list:
+    """(id, text) of the `C-n:` / `P-n:` items of a constraints / crosscutting section note."""
+    prefix = ARC42_ITEMS.get(str(n.fm.get("section") or ""))
+    if not prefix:
+        return []
+    out = []
+    for line in strip_code(n.body).splitlines():
+        m = ARC42_ITEM_RE.match(line)
+        if m and m.group(1).startswith(prefix + "-"):
+            out.append((m.group(1), m.group(2)))
+    return out
+
+
+def adr_rule(n: Note) -> str:
+    r = n.fm.get("rule")
+    if isinstance(r, str) and r.strip():
+        return r.strip()
+    return section_line(n, "decision") or n.summary or n.title
+
+
+def _lint_convention(n: Note, add, st) -> None:
+    level = n.fm.get("level")
+    if not level:
+        add("error", n, "convention without 'level' (must|should)")
+    elif level not in CONVENTION_LEVELS:
+        add("error", n, f"level '{level}' not valid ({', '.join(CONVENTION_LEVELS)})")
+    rule = n.fm.get("rule")
+    if not (isinstance(rule, str) and rule.strip()):
+        add("error", n, "convention without 'rule' (one sentence)")
+    src = n.fm.get("source")
+    if src and src not in CONVENTION_SOURCES:
+        add("warn", n, f"source '{src}' not valid ({', '.join(CONVENTION_SOURCES)})")
+    if not section_text(n, "do") or not section_text(n, "don't"):
+        add("warn", n, "convention without '## Do' and '## Don't' examples")
+    if st.available:
+        tree = st.tree()
+        for glob in scope_globs(n):
+            m = ref_matcher(glob)
+            if not any(m(p) for p in tree):
+                add("warn", n, f"scope matches no file at the target: {glob}")
+
+
+def _lint_architecture(n: Note, add, sections: dict) -> None:
+    sec = n.fm.get("section")
+    if sec not in ARC42_SECTIONS:
+        add("error", n, f"section '{sec or ''}' not valid ({', '.join(ARC42_SECTIONS)})")
+        return
+    if sec in sections and sections[sec] != n.rel:
+        add("error", n, f"section '{sec}' already in {sections[sec]}")
+        return
+    sections[sec] = n.rel
+    diagram = ARC42_DIAGRAMS.get(sec)
+    if diagram and not re.search(rf"```mermaid\s*\n\s*{re.escape(diagram)}", n.body):
+        add("warn", n, f"no ```mermaid {diagram} diagram")
+    prefix = ARC42_ITEMS.get(sec)
+    if prefix and not arc42_items(n):
+        add("warn", n, f"no '{prefix}-n:' items (guardrails read them)")
+
+
+ARCH_MARKERS = {"architecture", "architectural", "adr"}
+
+
+def _lint_adr(n: Note, add) -> None:
+    if n.type == "decision":
+        tags = {t.lower() for t in _as_list(n.fm.get("tags"))}
+        kind = str(n.fm.get("kind") or "").lower()
+        if kind in ARCH_MARKERS or tags & ARCH_MARKERS:
+            add("warn", n, "looks architectural: move it to architecture/adr/ with `vault mv`")
+        return
+    if not re.match(r"^adr-\d{4}-", n.path.stem):
+        add("warn", n, "ADR file name should be adr-NNNN-<name>.md")
+    if n.status == "superseded" and not n.fm.get("superseded_by"):
+        add("warn", n, "superseded ADR without 'superseded_by'")
+
+
+def _lint_proposal(ctx: Ctx, n: Note, add) -> None:
+    state, kind = str(n.fm.get("proposal_status") or "none"), str(n.fm.get("proposal_kind") or "none")
+    if state not in PROPOSAL_STATUSES:
+        add("warn", n, f"proposal_status '{state}' not valid ({', '.join(PROPOSAL_STATUSES)})")
+    if kind not in PROPOSAL_KINDS:
+        add("warn", n, f"proposal_kind '{kind}' not valid ({', '.join(PROPOSAL_KINDS)})")
+    if n.type == "proposal" and kind not in CHANGE_PROPOSAL_KINDS:
+        add("error", n, f"proposal note needs proposal_kind {' or '.join(CHANGE_PROPOSAL_KINDS)}")
+        return
+    if kind in NOTE_PROPOSAL_KINDS:
+        want = "adr" if kind == "adr-new" else "convention"
+        if n.type != want:
+            add("error", n, f"{kind} proposal must be a {want} note")
+        elif state == "open" and n.status != "proposed":
+            add("warn", n, f"open {kind} proposal should have status 'proposed'")
+        return
+    if kind not in CHANGE_PROPOSAL_KINDS or state != "open":
+        return
+    target = proposal_target_path(ctx, n)
+    if target is None:
+        add("error", n, f"proposal_target not found: '{n.fm.get('proposal_target', '')}'")
+        return
+    if not n.fm.get("base_hash"):
+        add("error", n, "change proposal without 'base_hash' (`vault hash <target>`)")
+    elif n.fm.get("base_hash") != note_hash(target.read_text(encoding="utf-8")):
+        add("warn", n, "target changed since the proposal was written: needs rebase (ops/proposal-rebase.md)")
+    if proposed_text(n.body) is None:
+        add("error", n, "no '## Proposed note' fenced block (````markdown … ````)")
+
+
+def note_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+PROPOSED_FENCE_RE = re.compile(r"^(`{4,}|~{4,})[\w-]*\s*$")
+
+
+def proposed_text(body: str) -> str | None:
+    """The full new note text inside the first 4+-backtick (or tilde) fence under `## Proposed note`."""
+    lines = body.splitlines()
+    try:
+        start = next(i for i, ln in enumerate(lines) if ln.strip().lower() == "## proposed note")
+    except StopIteration:
+        return None
+    fence, buf = None, []
+    for ln in lines[start + 1:]:
+        if fence is None:
+            if ln.startswith("## "):
+                return None
+            m = PROPOSED_FENCE_RE.match(ln.strip())
+            if m:
+                fence = m.group(1)
+            continue
+        if ln.strip() == fence:
+            return "\n".join(buf) + "\n"
+        buf.append(ln)
+    return None
+
+
+def find_note_path(ctx: Ctx, ref: str) -> Path | None:
+    """File of the note `ref` names inside ctx's project: `[[link]]`, `link#Heading`, vault- or project-relative."""
+    r = (ref or "").strip()
+    if r.startswith("[[") and r.endswith("]]"):
+        r = r[2:-2]
+    r = r.split("|", 1)[0].split("#", 1)[0].strip()
+    if not (r and ctx.project_dir):
+        return None
+    p = Path(r).expanduser()
+    for cand in ([p] if p.is_absolute() else [ctx.vault / r, ctx.project_dir / r]):
+        for f in (cand, cand.with_name(cand.name + ".md")):
+            if f.is_file():
+                try:
+                    f.resolve().relative_to(ctx.project_dir.resolve())
+                except ValueError:
+                    continue
+                return f
+    return None
+
+
+def proposal_target_path(ctx: Ctx, n: Note) -> Path | None:
+    return find_note_path(ctx, str(n.fm.get("proposal_target") or ""))
 
 
 # --------------------------------------------------------------------------- graph
@@ -1244,8 +1540,13 @@ def lessons(ctx: Ctx, audience=None, statuses=("active",)) -> list:
 
 
 def open_proposals(ctx: Ctx) -> list:
-    """Lessons (any status) whose proposal_status is `open`."""
-    return [n for n in lessons(ctx, statuses=None) if n.fm.get("proposal_status") == "open"]
+    """Notes of any type whose proposal_status is `open`: lessons first (lesson order), then the rest by path."""
+    if not (ctx and ctx.matched and ctx.project_dir and ctx.project_dir.is_dir()):
+        return []
+    found = [n for n in load_notes(ctx.project_dir, ctx.vault)
+             if n.type not in ("hub", "log") and n.fm.get("proposal_status") == "open"]
+    les = sorted((n for n in found if n.type == "lesson"), key=lesson_sort_key)
+    return les + sorted((n for n in found if n.type != "lesson"), key=lambda n: n.rel)
 
 
 def lesson_dict(n: Note) -> dict:
@@ -1281,27 +1582,51 @@ def symbols_in(body: str) -> list:
 # --------------------------------------------------------------------------- hubs / index / log
 
 
-def hub_text(slug: str, folder: str, notes: list) -> str:
+ARC42_NUMBERS = {"goals": 1, "constraints": 2, "context": 3, "building-blocks": 5, "runtime": 6, "deployment": 7,
+                 "crosscutting": 8, "quality": 10, "risks": 11}
+LEVEL_ORDER = {"must": 0, "should": 1}
+
+
+def _arc42_key(n: Note):
+    sec = str(n.fm.get("section") or n.path.stem)
+    return (ARC42_NUMBERS.get(sec, 99), n.path.stem)
+
+
+def hub_text(slug: str, folder: str, notes: list, prefix: str = "") -> str:
     title = HUB_TITLES[folder]
-    items = [n for n in notes if n.prel.startswith(f"{folder}/") and n.type not in ("hub", "log")]
+    items = [n for n in notes if note_folder(n.prel) == folder and n.type not in ("hub", "log")]
+    labels: dict = {}
     if folder == "problems":
         order = {"open": 0, "wontfix": 1, "resolved": 2}
         items.sort(key=lambda n: (order.get(n.status, 0), n.title.lower()))
-    elif folder == "decisions":
+    elif folder in ("decisions", "architecture/adr", "proposals"):
         items.sort(key=lambda n: n.path.stem)
     elif folder == "lessons":
         items.sort(key=lesson_sort_key)
     elif folder == "retros":
         items.sort(key=lambda n: (_neg_date(n.fm.get("date") or n.path.stem[:10]), n.path.stem))
+    elif folder == "conventions":
+        items.sort(key=lambda n: (LEVEL_ORDER.get(convention_level(n), 2), n.status == "retired", n.title.lower()))
+        labels = {n.rel: f"**{convention_level(n).upper()}** " for n in items if convention_level(n)}
+    elif folder == "architecture":
+        items.sort(key=_arc42_key)
+        labels = {n.rel: f"{ARC42_NUMBERS[n.fm['section']]}. " for n in items
+                  if n.fm.get("section") in ARC42_NUMBERS}
     else:
         items.sort(key=lambda n: n.title.lower())
     lines = [f"# {title} — {slug}", "", "<!-- generated by `vault commit`; do not edit -->", ""]
-    if not items:
-        lines.append("_No notes yet._")
+    entries = []
     for n in items:
         status = f" _({n.status})_" if n.status and n.status not in ("active", "recorded") else ""
         summary = f" — {n.summary}" if n.summary else ""
-        lines.append(f"- [[{n.link}|{n.title}]]{summary}{status}")
+        entries.append((_arc42_key(n) if folder == "architecture" else None,
+                        f"- {labels.get(n.rel, '')}[[{n.link}|{n.title}]]{summary}{status}"))
+    if folder == "architecture":
+        entries.append(((9, ""), f"- 9. [[{prefix}architecture/adr/_index|Architecture decisions (ADR)]]"))
+        entries.sort(key=lambda e: e[0])
+    if not entries:
+        lines.append("_No notes yet._")
+    lines += [e[1] for e in entries]
     fields = {"title": f"{title} ({slug})", "type": "hub", "summary": f"Generated list of {folder} notes."}
     return fmlib.render(fields, "\n" + "\n".join(lines) + "\n")
 
@@ -1313,7 +1638,7 @@ def write_hubs(ctx: Ctx) -> list:
         if not (ctx.project_dir / folder).is_dir():
             continue
         path = ctx.project_dir / folder / "_index.md"
-        text = hub_text(ctx.slug, folder, notes)
+        text = hub_text(ctx.slug, folder, notes, ctx.link_prefix)
         if not path.exists() or path.read_text(encoding="utf-8") != text:
             path.write_text(text, encoding="utf-8")
             written.append(path)
@@ -1366,6 +1691,172 @@ def append_log(ctx: Ctx, line: str, details: list = None) -> None:
         f.write(f"\n## [{today()}] {line}\n")
         for d in details or []:
             f.write(f"- {d}\n")
+
+
+# --------------------------------------------------------------------------- guardrails
+
+
+def _scope_match(globs: list, paths) -> list | None:
+    """Globs that match any path; [] for a global note (no scope); None when scoped and nothing matches."""
+    if paths is None or not globs:
+        return list(globs)
+    hit = [gl for gl in globs if any(ref_matcher(gl)(p) for p in paths)]
+    return hit or None
+
+
+def _guardrail(n: Note, kind: str, level: str, rule: str, scope: list) -> dict:
+    return {"link": n.link, "title": n.title, "kind": kind, "level": level, "rule": rule, "scope_match": scope,
+            "status": n.status}
+
+
+def guardrail_bullet(item: dict) -> str:
+    label = "ADR" if item["kind"] == "adr" else item["level"].upper()
+    tail = f" (scope: {', '.join(item['scope_match'])})" if item["scope_match"] else ""
+    if item["status"] == "inferred":
+        tail += " (inferred)"
+    return f"- {label} [[{item['link']}]] — {item['rule']}{tail}"
+
+
+def guardrail_bullets(data: dict) -> str:
+    return "\n".join(guardrail_bullet(i) for key in ("conventions", "architecture", "adrs") for i in data[key])
+
+
+def guardrails(ctx: Ctx, paths=None, budget: int = GUARDRAILS_BUDGET) -> dict:
+    """Conventions (must, then should) whose scope covers `paths` (all when None), the C-/P- items of the SAD and the
+    accepted ADRs of architecture/adr/ (newest first). Plain decisions/ never count. Over `budget` chars of bullets,
+    should-conventions go first, then the oldest ADRs; must items always stay."""
+    data = {"conventions": [], "architecture": [], "adrs": []}
+    if not (ctx and ctx.initialized):
+        return data
+    rels = None if paths is None else [p[2:] if p.startswith("./") else p for p in paths]
+    for n in load_notes(ctx.project_dir, ctx.vault):
+        t = n.inferred_type
+        if t != n.type or t not in GUARDRAIL_STATUSES or n.status not in GUARDRAIL_STATUSES[t]:
+            continue
+        if t == "convention":
+            level = convention_level(n)
+            scope = _scope_match(scope_globs(n), rels)
+            if level and scope is not None:
+                data["conventions"].append(_guardrail(n, "convention", level, convention_rule(n), scope))
+        elif t == "architecture":
+            kind = "constraint" if n.fm.get("section") == "constraints" else "principle"
+            for ident, text in arc42_items(n):
+                data["architecture"].append(_guardrail(n, kind, "must", f"{ident}: {text}", []))
+        else:
+            scope = _scope_match(scope_globs(n), rels)
+            if scope is not None:
+                data["adrs"].append(_guardrail(n, "adr", "must", adr_rule(n), scope))
+    data["conventions"].sort(key=lambda i: (LEVEL_ORDER[i["level"]], i["title"].lower()))
+    data["architecture"].sort(key=lambda i: (i["kind"] != "constraint", i["link"],
+                                             int(re.sub(r"\D", "", i["rule"].split(":", 1)[0]) or 0)))
+    data["adrs"].sort(key=lambda i: i["link"].rsplit("/", 1)[-1], reverse=True)
+    while budget and len(guardrail_bullets(data)) > budget:
+        should = [i for i, c in enumerate(data["conventions"]) if c["level"] == "should"]
+        if should:
+            data["conventions"].pop(should[-1])
+        elif data["adrs"]:
+            data["adrs"].pop()
+        else:
+            break
+    return data
+
+
+# --------------------------------------------------------------------------- numbering / move
+
+NUMBERED_RE = re.compile(r"^(?:adr|dec)-(\d{4})(?:-|$)")
+
+
+def next_number(project_dir: Path) -> int:
+    """Next free NNNN, shared by decisions/ and architecture/adr/ so a moved ADR never collides."""
+    top = 0
+    for folder in (FOLDERS["decision"], FOLDERS["adr"]):
+        d = project_dir / folder
+        if d.is_dir():
+            for f in d.glob("*.md"):
+                m = NUMBERED_RE.match(f.stem)
+                if m:
+                    top = max(top, int(m.group(1)))
+    return top + 1
+
+
+def _sub_outside_code(text: str, fn) -> str:
+    out, pos = [], 0
+    for m in re.finditer(r"```.*?```|`[^`\n]*`", text, re.S):
+        out.append(fn(text[pos:m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(fn(text[pos:]))
+    return "".join(out)
+
+
+def _vault_md_files(vault: Path) -> list:
+    files = []
+    for dirpath, dirnames, filenames in os.walk(vault):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        files += [Path(dirpath) / fn for fn in sorted(filenames) if fn.endswith(".md")]
+    return files
+
+
+def move_note(ctx: Ctx, src: Path, new_rel: str, dry_run: bool = False) -> dict:
+    """Move a note inside ctx's project to `new_rel` (project-relative) and rewrite every wikilink to it across the
+    vault. The old project-relative link goes to `aliases`; a `type` that followed the old folder follows the new."""
+    new_rel = new_rel.strip().removeprefix("./")
+    if not new_rel.endswith(".md"):
+        new_rel += ".md"
+    dst = Path(os.path.normpath(ctx.project_dir / new_rel))
+    try:
+        new_rel = dst.relative_to(ctx.project_dir).as_posix()
+    except ValueError:
+        raise SystemExit(f"vault: {new_rel} is outside the project") from None
+    old_prel = src.resolve().relative_to(ctx.project_dir.resolve()).as_posix()
+    if dst.exists():
+        raise SystemExit(f"vault: {new_rel} already exists")
+    old_link = ctx.link_prefix + old_prel[:-3]
+    new_link = ctx.link_prefix + new_rel[:-3]
+    files = _vault_md_files(ctx.vault)
+    basenames: dict = {}
+    for f in files:
+        rel = f.relative_to(ctx.vault).as_posix()
+        basenames.setdefault(f.name, []).append(rel)
+    old_vrel = old_link + ".md"
+
+    def points_to_old(target: str) -> bool:
+        rel, _ = resolve_link(ctx.vault, target, basenames)
+        return rel == old_vrel
+
+    def rewrite(chunk: str) -> str:
+        def one(m):
+            if not points_to_old(m.group(1).strip()):
+                return m.group(0)
+            return f"[[{new_link}{m.group(2) or ''}{'|' + m.group(3) if m.group(3) is not None else ''}]]"
+        return WIKILINK_RE.sub(one, chunk)
+
+    changed = {}
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        new = _sub_outside_code(text, rewrite)
+        if f.resolve() == src.resolve():
+            note = load_note(src, ctx.vault, ctx.project_dir)
+            aliases = note.aliases if note else []
+            if old_prel[:-3] not in aliases:
+                new = fmlib.set_field(new, "aliases", aliases + [old_prel[:-3]])
+            old_t, new_t = note_type_for(old_prel), note_type_for(new_rel)
+            if note and note.fm.get("type") == old_t and new_t and new_t != old_t:
+                new = fmlib.set_field(new, "type", new_t)
+        if new != text:
+            changed[f] = new
+    if not dry_run:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        for f, text in changed.items():
+            f.write_text(text, encoding="utf-8")
+        src.rename(dst)
+    rewritten = sorted(f.relative_to(ctx.vault).as_posix() for f in changed if f.resolve() != src.resolve())
+    return {"from": old_link, "to": new_link, "rewritten": rewritten, "dry_run": dry_run}
+
+
+def note_type_for(prel: str) -> str | None:
+    folder = note_folder(prel)
+    return FOLDER_TYPES[folder] if folder else None
 
 
 # --------------------------------------------------------------------------- lock

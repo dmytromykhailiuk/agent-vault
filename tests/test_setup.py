@@ -713,13 +713,14 @@ class VersionAndVloop(SetupBase):
         out = subprocess.run([sys.executable, str(BIN), "version", "--json"], capture_output=True, text=True,
                              cwd=str(self.tmp), check=True).stdout
         data = json.loads(out)
-        self.assertEqual(set(data), {"name", "version", "contract", "skill_dir", "cli"})
-        self.assertEqual((data["name"], data["contract"]), ("agent-vault", 1))
+        self.assertEqual(set(data), {"name", "version", "contract", "contracts", "schema", "skill_dir", "cli"})
+        self.assertEqual((data["name"], data["contract"], data["contracts"], data["schema"]),
+                         ("agent-vault", 2, [1, 2], 2))
         self.assertEqual(data["version"], read_json(ROOT / ".claude-plugin/plugin.json")["version"])
         self.assertTrue(Path(data["cli"]).is_absolute())
         text = subprocess.run([sys.executable, str(BIN), "version"], capture_output=True, text=True,
                               cwd=str(self.tmp), check=True).stdout
-        self.assertEqual(text.strip(), f"agent-vault {data['version']} (contract 1)")
+        self.assertEqual(text.strip(), f"agent-vault {data['version']} (contract 2)")
 
     def test_none_found(self):
         with self.env():

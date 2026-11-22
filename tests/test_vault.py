@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -763,7 +764,7 @@ class TestLessonsAndRetros(VaultTestCase):
         self.assertNotIn("Promoted rule.", block)
         harness_lines = lines[lines.index("Harness lessons:") + 1:-1]
         self.assertEqual(harness_lines, ["- Harness rule 0. (×9)", "- Harness rule 1. (×8)", "- Harness rule 2. (×7)"])
-        self.assertEqual(lines[-1], f"Pending: 1 harness/repo change proposal(s) await your approval → "
+        self.assertEqual(lines[-1], f"Pending: 1 change proposal(s) await your approval → "
                                     f"`{BIN} lessons --proposals`, then `{BIN} proposal accept|reject <note>`")
         self.assertTrue(Path(str(BIN)).is_absolute())
         # Huge index summary: the total still fits.
@@ -789,6 +790,321 @@ class TestLessonsAndRetros(VaultTestCase):
         ctx = json.loads(self.hook({"cwd": str(self.repo)}))["hookSpecificOutput"]["additionalContext"]
         self.assertNotIn("Lessons from past retros", ctx)
 
+
+
+def convention_text(name="no-direct-db", level="must", status="active", scope=("src/auth/**",), rule=None, **fields):
+    base = {"title": name.replace("-", " ").capitalize(), "type": "convention", "status": status,
+            "summary": f"{name} summary.", "aliases": [], "rule": rule or f"Rule of {name}.", "scope": list(scope),
+            "source": "user", "code_refs": [], "verified": ""}
+    if level is not None:
+        base["level"] = level
+    base.update(fields)
+    return fm.render(base, "\n## Summary\nS.\n\n## Rule\nR.\n\n## Do\n- d\n\n## Don't\n- x\n")
+
+
+def arch_text(section, body, status="active"):
+    return fm.render({"title": section.capitalize(), "type": "architecture", "status": status,
+                      "summary": f"{section} of the system.", "section": section, "code_refs": [], "verified": ""},
+                     "\n## Summary\nS.\n\n" + body)
+
+
+def adr_text(title, status="accepted", decision="Use the repository layer for all DB access.", **fields):
+    base = {"title": title, "type": "adr", "status": status, "summary": f"{title}.", "aliases": [],
+            "code_refs": [], "verified": ""}
+    base.update(fields)
+    return fm.render(base, f"\n## Summary\nS.\n\n## Context\nC.\n\n## Decision\n{decision}\n")
+
+
+class TestSchema2(VaultTestCase):
+    def setUp(self):
+        super().setUp()
+        self.p = self.init_project()
+
+    def guardrails(self, *argv, **kw):
+        return self.run_cli("guardrails", *argv, **kw)
+
+    def fixture(self):
+        p = self.p
+        write(p / "conventions/no-direct-db.md", convention_text("no-direct-db", scope=["src/auth/**"]))
+        write(p / "conventions/naming.md", convention_text("naming", level="should", scope=[]))
+        write(p / "conventions/inferred-rule.md", convention_text("inferred-rule", status="inferred", scope=[]))
+        write(p / "conventions/proposed-rule.md", convention_text("proposed-rule", status="proposed", scope=[]))
+        write(p / "conventions/old-rule.md", convention_text("old-rule", status="retired", scope=[]))
+        write(p / "architecture/constraints.md", arch_text("constraints", "## Items\n- C-1: Python 3.10 only.\n"))
+        write(p / "architecture/crosscutting.md", arch_text("crosscutting", "- P-1: Fail fast.\n"))
+        write(p / "architecture/adr/adr-0001-repo-layer.md", adr_text("Repo layer"))
+        write(p / "architecture/adr/adr-0002-scan-queue.md", adr_text("Scan queue", decision="Queue scans.",
+                                                                       scope=["src/scan/**"]))
+        write(p / "architecture/adr/adr-0003-maybe.md", adr_text("Maybe", status="proposed"))
+        write(p / "decisions/adr-0004-tooling.md", fm.render(
+            {"title": "Tooling", "type": "decision", "status": "accepted", "summary": "Use jest."},
+            "\n## Summary\nS.\n\n## Decision\nUse jest.\n"))
+
+    def test_fresh_vault_schema_and_lint_clean(self):
+        meta = core.read_meta(self.vault / "demo")
+        self.assertEqual(meta["schema"], core.VAULT_SCHEMA)
+        for d in ("conventions", "architecture", "architecture/adr", "decisions", "proposals"):
+            self.assertTrue((self.p / d).is_dir(), d)
+        fresh = self.tmp / "fresh"
+        fresh.mkdir()
+        sh(fresh, "git", "init", "-q", "-b", "master")
+        os.environ["VAULT_ROOT"] = str(self.tmp / "fresh-vault")
+        self.run_cli("resolve", "--create", "--project", "fresh", cwd=fresh)
+        pdir = self.tmp / "fresh-vault" / "fresh"
+        write(pdir / "index.md", fm.render({"title": "Fresh", "type": "project", "status": "active",
+                                            "summary": "Fresh project."}, "\n## Summary\nFresh.\n"))
+        self.run_cli("commit", "-m", "init", "--project", "fresh", cwd=fresh)
+        issues = json.loads(self.run_cli("lint", "--json", "--project", "fresh", cwd=fresh))
+        self.assertEqual(issues, [])
+        self.assertTrue((pdir / "architecture/adr/_index.md").exists())
+        self.assertIn("Schema:   2", self.run_cli("status", "--project", "fresh", cwd=fresh))
+
+    def test_nested_type_and_hubs(self):
+        self.fixture()
+        notes = {n.prel: n for n in core.load_notes(self.p, self.vault, )}
+        self.assertEqual(notes["architecture/adr/adr-0001-repo-layer.md"].inferred_type, "adr")
+        self.assertEqual(notes["architecture/constraints.md"].inferred_type, "architecture")
+        self.assertEqual(notes["conventions/naming.md"].inferred_type, "convention")
+        self.assertEqual(core.note_folder("architecture/adr/x.md"), "architecture/adr")
+        write(self.p / "architecture/goals.md", arch_text("goals", "Goals.\n"))
+        self.run_cli("commit", "-m", "hubs")
+        conv = (self.p / "conventions/_index.md").read_text()
+        self.assertLess(conv.index("**MUST** [[demo/conventions/no-direct-db"), conv.index("**SHOULD**"))
+        arch = (self.p / "architecture/_index.md").read_text()
+        order = [arch.index(x) for x in ("1. [[demo/architecture/goals", "2. [[demo/architecture/constraints",
+                                         "8. [[demo/architecture/crosscutting",
+                                         "9. [[demo/architecture/adr/_index")]
+        self.assertEqual(order, sorted(order), arch)
+        self.assertNotIn("adr-0001", arch)
+        adr = (self.p / "architecture/adr/_index.md").read_text()
+        self.assertLess(adr.index("adr-0001"), adr.index("adr-0002"))
+        self.assertNotIn("Tooling", adr)
+        self.assertIn("Tooling", (self.p / "decisions/_index.md").read_text())
+        self.assertEqual(self.run_cli("next-id", "adr", "--name", "Event Bus").strip(),
+                         "architecture/adr/adr-0005-event-bus.md")
+        self.assertEqual(self.run_cli("next-id", "decision").strip(), "decisions/dec-0005.md")
+
+    def test_lint_rules(self):
+        self.fixture()
+        write(self.p / "conventions/no-level.md", convention_text("no-level", level=None, scope=["src/nowhere/**"]))
+        write(self.p / "conventions/bare.md", fm.render(
+            {"title": "Bare", "type": "convention", "status": "active", "summary": "x", "level": "may"},
+            "\n## Summary\nS.\n"))
+        write(self.p / "architecture/context.md", arch_text("context", "No diagram.\n"))
+        write(self.p / "architecture/zz-context.md", arch_text("context", "```mermaid\nC4Context\n```\n"))
+        write(self.p / "architecture/bogus.md", arch_text("strategy", "x\n"))
+        write(self.p / "architecture/crosscutting.md", arch_text("crosscutting", "No items.\n"))
+        write(self.p / "decisions/adr-0005-db.md", fm.render(
+            {"title": "DB", "type": "decision", "status": "accepted", "summary": "x", "tags": ["architecture"]},
+            "\n## Summary\nS.\n"))
+        write(self.p / "architecture/adr/bad-name.md", adr_text("Bad name", status="superseded"))
+        self.run_cli("commit", "-m", "lint fixture", "--stamp-all", "--synced")
+        issues = json.loads(self.run_cli("lint", "--json", expect=1))
+        by = {}
+        for i in issues:
+            by.setdefault(i["note"], []).append((i["level"], i["msg"]))
+        L = "demo/"
+        self.assertIn(("error", "convention without 'level' (must|should)"), by[L + "conventions/no-level.md"])
+        self.assertIn(("warn", "scope matches no file at the target: src/nowhere/**"), by[L + "conventions/no-level.md"])
+        bare = by[L + "conventions/bare.md"]
+        self.assertIn(("error", "level 'may' not valid (must, should)"), bare)
+        self.assertIn(("error", "convention without 'rule' (one sentence)"), bare)
+        self.assertIn(("warn", "convention without '## Do' and '## Don't' examples"), bare)
+        self.assertFalse(any(lv == "error" for lv, _ in by.get(L + "conventions/naming.md", [])))
+        self.assertIn(("warn", "no ```mermaid C4Context diagram"), by[L + "architecture/context.md"])
+        self.assertIn(("error", "section 'context' already in demo/architecture/context.md"),
+                      by[L + "architecture/zz-context.md"])
+        self.assertTrue(any(lv == "error" and m.startswith("section 'strategy' not valid")
+                            for lv, m in by[L + "architecture/bogus.md"]))
+        self.assertIn(("warn", "no 'P-n:' items (guardrails read them)"), by[L + "architecture/crosscutting.md"])
+        self.assertIn(("warn", "looks architectural: move it to architecture/adr/ with `vault mv`"),
+                      by[L + "decisions/adr-0005-db.md"])
+        bad = by[L + "architecture/adr/bad-name.md"]
+        self.assertIn(("warn", "ADR file name should be adr-NNNN-<name>.md"), bad)
+        self.assertIn(("warn", "superseded ADR without 'superseded_by'"), bad)
+
+    def test_lint_schema_1_needs_migration(self):
+        meta = core.read_meta(self.p)
+        meta["schema"] = 1
+        core.write_meta(self.p, meta)
+        issues = json.loads(self.run_cli("lint", "--json", expect=1))
+        self.assertIn({"level": "error", "note": "demo/_meta.json",
+                       "msg": "vault schema 1 < 2: needs migration (/vault migrate)"}, issues)
+        del meta["schema"]
+        core.write_meta(self.p, meta)
+        self.assertEqual(core.vault_schema(core.resolve(self.repo)), 1)
+        self.assertIn("Schema:   1 → 2: run `/vault migrate`", self.run_cli("status"))
+
+    def test_guardrails(self):
+        self.fixture()
+        out = self.guardrails("--paths", "src/auth/login.ts").splitlines()
+        self.assertEqual(out, [
+            "- MUST [[demo/conventions/inferred-rule]] — Rule of inferred-rule. (inferred)",
+            "- MUST [[demo/conventions/no-direct-db]] — Rule of no-direct-db. (scope: src/auth/**)",
+            "- SHOULD [[demo/conventions/naming]] — Rule of naming.",
+            "- MUST [[demo/architecture/constraints]] — C-1: Python 3.10 only.",
+            "- MUST [[demo/architecture/crosscutting]] — P-1: Fail fast.",
+            "- ADR [[demo/architecture/adr/adr-0001-repo-layer]] — Use the repository layer for all DB access.",
+        ])
+        scan = self.guardrails("--paths", str(self.repo / "src/scan/scan.ts"))
+        self.assertNotIn("no-direct-db", scan)
+        self.assertIn("adr-0002-scan-queue]] — Queue scans. (scope: src/scan/**)", scan)
+        full = self.guardrails()
+        for absent in ("proposed-rule", "old-rule", "adr-0003", "decisions/", "Tooling"):
+            self.assertNotIn(absent, full)
+        data = json.loads(self.guardrails("--paths", "src/auth/login.ts", "--format", "json"))
+        self.assertEqual((data["contract"], data["schema"]), (2, 2))
+        self.assertEqual(set(data), {"contract", "schema", "conventions", "architecture", "adrs"})
+        item = next(c for c in data["conventions"] if c["link"] == "demo/conventions/no-direct-db")
+        self.assertEqual(set(item), {"link", "title", "kind", "level", "rule", "scope_match", "status"})
+        self.assertEqual((item["kind"], item["level"], item["scope_match"], item["status"]),
+                         ("convention", "must", ["src/auth/**"], "active"))
+        self.assertEqual([a["kind"] for a in data["architecture"]], ["constraint", "principle"])
+        small = self.guardrails("--paths", "src/auth/login.ts", "--budget", "300").splitlines()
+        self.assertFalse(any(ln.startswith("- SHOULD") for ln in small))
+        self.assertFalse(any(ln.startswith("- ADR") for ln in small))
+        self.assertEqual(sum(ln.startswith("- MUST") for ln in small), 4)
+        mid = self.guardrails("--paths", "src/auth/login.ts", "--budget", "420").splitlines()
+        self.assertFalse(any(ln.startswith("- SHOULD") for ln in mid))
+        self.assertTrue(any(ln.startswith("- ADR") for ln in mid))
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        self.assertEqual(self.guardrails(cwd=plain), "")
+        self.assertEqual(self.guardrails("--format", "json", cwd=plain), "")
+
+    def test_context_digest_resolves_symlinked_cli(self):
+        self.fixture()
+        link = self.tmp / "linked skill"
+        link.symlink_to(core.SKILL_DIR.resolve(), target_is_directory=True)
+        with unittest.mock.patch.object(core, "SKILL_DIR", link):
+            last = cli._guardrails_block(core.resolve(self.repo)).splitlines()[-1]
+        real = (Path(cli.__file__).resolve().parents[2] / "bin" / "vault")
+        self.assertTrue(last.startswith(f"Guardrails CLI: {real} guardrails "), last)
+        self.assertNotIn("linked skill", last)
+
+    def test_context_digest_long_repo_root_keeps_cli_line(self):
+        self.fixture()
+        for i in range(10):
+            write(self.p / f"conventions/must-{i}.md", convention_text(f"must-{i}", scope=[], rule="r" * 40))
+        ctx = core.resolve(self.repo)
+        for size, with_cwd in ((600, True), (880, False)):
+            ctx.repo_root = Path("/" + "x" * size)
+            block = cli._guardrails_block(ctx)
+            self.assertLessEqual(len(block), cli.GUARDRAILS_BLOCK_MAX, size)
+            self.assertTrue(block.startswith(cli.GUARDRAILS_HEADER), size)
+            last = block.splitlines()[-1]
+            self.assertTrue(last.startswith("Guardrails CLI: ") and last.endswith(" --paths <file> <file>... --format bullets"))
+            self.assertEqual("--cwd " in last, with_cwd, size)
+
+    def test_context_text_ends_with_cli_line_after_lessons(self):
+        self.fixture()
+        with unittest.mock.patch.object(cli, "_lessons_block", return_value="Lessons from past retros (follow them):\n- R."):
+            text = cli._context_text(core.resolve(self.repo))
+        self.assertLess(text.index("Lessons from past retros"), text.index(cli.GUARDRAILS_HEADER))
+        self.assertTrue(text.splitlines()[-1].startswith("Guardrails CLI: "), text)
+
+    def test_context_digest(self):
+        self.fixture()
+        for i in range(8):
+            write(self.p / f"architecture/adr/adr-{10 + i:04d}-x{i}.md", adr_text(f"X{i}", decision=f"Decision {i}."))
+        for i in range(30):
+            write(self.p / f"conventions/must-{i}.md", convention_text(f"must-{i}", scope=[], rule="r" * 40))
+        block = cli._guardrails_block(core.resolve(self.repo))
+        self.assertTrue(block.startswith(cli.GUARDRAILS_HEADER), block)
+        self.assertLessEqual(len(block), cli.GUARDRAILS_BLOCK_MAX)
+        self.assertNotIn("SHOULD", block)
+        last = block.splitlines()[-1]
+        cli_path = (core.SKILL_DIR / "bin" / "vault").resolve()
+        self.assertEqual(last, f"Guardrails CLI: {cli_path} guardrails --cwd {core.resolve(self.repo).repo_root}"
+                               " --paths <file> <file>... --format bullets")
+        self.assertEqual(cli_path, (Path(cli.__file__).resolve().parents[2] / "bin" / "vault"))
+        for f in self.p.glob("conventions/must-*.md"):
+            f.unlink()
+        block = cli._guardrails_block(core.resolve(self.repo))
+        self.assertEqual(block.count("- ADR"), 5)
+        self.assertIn("adr-0017-x7", block)
+        self.assertIn("C-1: Python 3.10 only.", block)
+        text = cli._context_text(core.resolve(self.repo))
+        self.assertIn("## Project knowledge vault: demo", text)
+        self.assertIn(cli.GUARDRAILS_HEADER, text)
+        meta = core.read_meta(self.p)
+        meta["schema"] = 1
+        core.write_meta(self.p, meta)
+        self.assertEqual(cli._guardrails_block(core.resolve(self.repo)), "vault needs migration: /vault migrate")
+        self.assertIn("vault needs migration: /vault migrate", cli._context_text(core.resolve(self.repo)))
+        meta["schema"] = 2
+        core.write_meta(self.p, meta)
+        with unittest.mock.patch.object(core, "guardrails", side_effect=RuntimeError("boom")):
+            text = cli._context_text(core.resolve(self.repo))
+        self.assertIn("## Project knowledge vault: demo", text)
+        self.assertNotIn(cli.GUARDRAILS_HEADER, text)
+
+    def test_proposals(self):
+        self.fixture()
+        self.run_cli("commit", "-m", "fixture")
+        write(self.p / "architecture/adr/adr-0005-cache.md", adr_text("Cache", status="proposed",
+                                                                     proposal_status="open", proposal_kind="adr-new"))
+        target = self.p / "conventions/naming.md"
+        new_note = convention_text("naming", level="should", scope=[], rule="Name things well.")
+        write(self.p / "proposals/naming-change.md", fm.render(
+            {"title": "Naming change", "type": "proposal", "status": "open", "summary": "Sharpen the naming rule.",
+             "proposal_status": "open", "proposal_kind": "convention-change",
+             "proposal_target": "[[demo/conventions/naming]]",
+             "base_hash": self.run_cli("hash", "demo/conventions/naming").strip()},
+            "\n## Summary\nS.\n\n## Proposed note\n````markdown\n" + new_note.rstrip("\n") + "\n````\n"))
+        listed = self.run_cli("lessons", "--proposals", "--no-harness").splitlines()
+        self.assertEqual(len(listed), 2, listed)
+        self.assertNotIn("adr-0005", self.guardrails())
+        self.assertEqual(self.run_cli("proposal", "accept", "demo/architecture/adr/adr-0005-cache").strip(),
+                         "proposal accepted: demo/architecture/adr/adr-0005-cache")
+        d = fm.read((self.p / "architecture/adr/adr-0005-cache.md").read_text())[0]
+        self.assertEqual((d["status"], d["proposal_status"]), ("accepted", "applied"))
+        self.assertIn("adr-0005-cache", self.guardrails())
+        write(target, target.read_text().replace("Rule of naming.", "Edited by the user."))
+        before = target.read_text()
+        prop = self.p / "proposals/naming-change.md"
+        prop_before = prop.read_text()
+        out = self.run_cli("proposal", "accept", "proposals/naming-change", expect=core.PROPOSAL_NEEDS_REBASE)
+        self.assertTrue(out.startswith("needs-rebase: demo/proposals/naming-change"), out)
+        self.assertEqual(target.read_text(), before)
+        self.assertEqual(prop.read_text(), prop_before)
+        issues = json.loads(self.run_cli("lint", "--json", expect=None))
+        self.assertTrue(any(i["note"] == "demo/proposals/naming-change.md" and "needs rebase" in i["msg"]
+                            for i in issues))
+        prop.write_text(fm.set_field(prop.read_text(), "base_hash", core.note_hash(before)))
+        self.run_cli("proposal", "accept", "proposals/naming-change")
+        self.assertEqual(target.read_text(), new_note)
+        d = fm.read(prop.read_text())[0]
+        self.assertEqual((d["status"], d["proposal_status"]), ("applied", "applied"))
+        self.assertEqual(sh(self.vault, "git", "log", "--format=%s", "-1"),
+                         "proposal: accept demo/proposals/naming-change")
+        self.assertIn("Name things well.", self.guardrails())
+        self.assertIn("not a proposal note", self.run_cli("proposal", "accept", "demo/conventions/naming", expect=1))
+
+    def test_mv_rewrites_links(self):
+        write(self.p / "decisions/adr-0001-db.md", fm.render(
+            {"title": "DB", "type": "decision", "status": "accepted", "summary": "DB choice.", "aliases": ["db"]},
+            "\n## Summary\nSee [[demo/modules/auth]].\n"))
+        mod = self.p / "modules/auth.md"
+        mod.write_text(mod.read_text() + "Decided in [[demo/decisions/adr-0001-db#Decision|the ADR]], "
+                       "[[adr-0001-db]] and `[[demo/decisions/adr-0001-db]]`.\n")
+        write(self.p / "lessons/l.md", lesson_text(evidence=["[[demo/decisions/adr-0001-db]]"]))
+        dry = json.loads(self.run_cli("mv", "decisions/adr-0001-db", "architecture/adr/adr-0001-db.md",
+                                      "--dry-run", "--json"))
+        self.assertEqual(dry["rewritten"], ["demo/lessons/l.md", "demo/modules/auth.md"])
+        self.assertTrue((self.p / "decisions/adr-0001-db.md").exists())
+        self.run_cli("mv", "[[demo/decisions/adr-0001-db]]", "architecture/adr/adr-0001-db")
+        self.assertFalse((self.p / "decisions/adr-0001-db.md").exists())
+        moved = fm.read((self.p / "architecture/adr/adr-0001-db.md").read_text())[0]
+        self.assertEqual(moved["type"], "adr")
+        self.assertEqual(moved["aliases"], ["db", "decisions/adr-0001-db"])
+        text = mod.read_text()
+        self.assertIn("[[demo/architecture/adr/adr-0001-db#Decision|the ADR]]", text)
+        self.assertIn("[[demo/architecture/adr/adr-0001-db]] and", text)
+        self.assertIn("`[[demo/decisions/adr-0001-db]]`", text)
+        self.assertIn("[[demo/architecture/adr/adr-0001-db]]", (self.p / "lessons/l.md").read_text())
+        self.assertIn("already exists", self.run_cli("mv", "architecture/adr/adr-0001-db", "modules/auth", expect=1))
+        self.assertIn("outside the project", self.run_cli("mv", "architecture/adr/adr-0001-db", "../x", expect=1))
 
 class TestHarness(VaultTestCase):
     def test_create_without_repo_shared(self):
@@ -904,6 +1220,53 @@ class TestLock(unittest.TestCase):
             self.assertFalse((tmp / ".lock").exists())
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestE2EFixes(VaultTestCase):
+    def test_guardrails_paths_comma_space_and_repeated(self):
+        p = self.init_project()
+        write(p / "conventions/no-direct-db.md", convention_text("no-direct-db", scope=["src/auth/**"]))
+        for argv in (["--paths", "src/scan/scan.ts,src/auth/login.ts"],
+                     ["--paths", "src/scan/scan.ts", "src/auth/login.ts"],
+                     ["--paths", "src/scan/scan.ts", "--paths", "src/auth/login.ts"],
+                     ["--paths", "src/scan/scan.ts, src/auth/login.ts,"]):
+            self.assertIn("no-direct-db", self.run_cli("guardrails", *argv), argv)
+        self.assertNotIn("no-direct-db", self.run_cli("guardrails", "--paths", "src/scan/scan.ts"))
+
+    def test_commit_repeated_stamp_stamps_all(self):
+        p = self.init_project()
+        out = self.run_cli("commit", "-m", "init", "--stamp", "modules/auth.md", "--stamp", "features/login.md",
+                           "--stamp", "guides/add-scan-step.md")
+        self.assertIn("verified 3 note(s)", out)
+        head = sh(self.repo, "git", "rev-parse", "HEAD")[:12]
+        for rel in ("modules/auth.md", "features/login.md", "guides/add-scan-step.md"):
+            self.assertEqual(core.load_note(p / rel, self.vault).verified, head, rel)
+
+    def test_lint_uncommitted_code_ref_is_warning(self):
+        p = self.init_project()
+        write(self.repo / "src/db/cache.ts", "export class LruCache {}\n")
+        write(p / "modules/auth.md", fm.render(
+            {"title": "auth module", "type": "module", "status": "active", "summary": "Session handling.",
+             "code_refs": ["src/auth/login.ts", "src/db/cache.ts", "src/gone.ts"]},
+            "\n## Summary\nUses `LruCache` and `refreshToken()`.\nBack to [[demo/features/login]].\n"))
+        self.run_cli("commit", "-m", "init")
+        issues = json.loads(self.run_cli("lint", "--json", expect=1))
+        auth = [(i["level"], i["msg"]) for i in issues if i["note"] == "demo/modules/auth.md"]
+        self.assertIn(("warn", "code_ref only in the working tree, not yet at origin/master: src/db/cache.ts"), auth)
+        self.assertIn(("error", "code_ref not found at origin/master: src/gone.ts"), auth)
+        self.assertFalse(any("cache.ts" in m for lv, m in auth if lv == "error"), auth)
+        self.assertFalse(any("LruCache" in m for _, m in auth), auth)
+
+    def test_lint_accepts_hub_links_before_commit(self):
+        p = self.init_project()
+        index = p / "index.md"
+        index.write_text(index.read_text() + "\n- [[demo/features/_index|features]] · [[demo/conventions/_index]]\n")
+        self.assertFalse((p / "features/_index.md").exists())
+        issues = json.loads(self.run_cli("lint", "--json", expect=None))
+        self.assertFalse([i for i in issues if "broken link" in i["msg"] and "_index" in i["msg"]], issues)
+        index.write_text(index.read_text() + "- [[demo/nowhere/_index]]\n")
+        issues = json.loads(self.run_cli("lint", "--json", expect=1))
+        self.assertIn({"level": "error", "note": "demo/index.md", "msg": "broken link [[demo/nowhere/_index]]"}, issues)
 
 
 if __name__ == "__main__":

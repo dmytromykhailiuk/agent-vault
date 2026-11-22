@@ -12,6 +12,7 @@
   --t-project: #1d1d1f; --t-feature: #2f6fde; --t-guide: #1f9d74; --t-problem: #d64545;
   --t-decision: #8a5cd1; --t-module: #e07a1f; --t-glossary: #6b7c93; --t-lesson: #c2457a;
   --t-retro: #8a8a8f; --t-code: #a5a5ab; --t-note: #8a8a8f;
+  --t-convention: #b8860b; --t-architecture: #0f7c8c; --t-adr: #5b3fa8; --t-proposal: #c9a227;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -21,6 +22,7 @@
     --t-project: #ececee; --t-feature: #6c9cf0; --t-guide: #3fc49a; --t-problem: #ef6b6b;
     --t-decision: #a987e6; --t-module: #f0954a; --t-glossary: #8fa0b8; --t-lesson: #e06a9c;
     --t-retro: #8a8a92; --t-code: #6a6a72; --t-note: #8a8a92;
+    --t-convention: #e0b23c; --t-architecture: #3fb6c6; --t-adr: #8f74e0; --t-proposal: #e8c75a;
   }
 }
 * { box-sizing: border-box; }
@@ -140,9 +142,9 @@ code.path { font-size: 12px; }
 <script>
 const DATA = /*__VAULT_DATA__*/null;
 
-const TYPES = ["project", "feature", "guide", "problem", "decision", "module", "glossary", "lesson", "retro", "note", "code"];
+const TYPES = ["project", "feature", "guide", "problem", "decision", "adr", "architecture", "convention", "module", "glossary", "lesson", "retro", "proposal", "note", "code"];
 const TYPE_LABELS = { code: "code files" };
-const HIDDEN_BY_DEFAULT = new Set(["lesson", "retro", "code"]);
+const HIDDEN_BY_DEFAULT = new Set(["lesson", "retro", "proposal", "code"]);
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();

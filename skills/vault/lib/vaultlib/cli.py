@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import signal
 import sys
 import webbrowser
@@ -14,10 +15,14 @@ from pathlib import Path
 from . import core
 from . import frontmatter as fmlib
 from . import gitutil as g
+from . import migrate
 from . import setup
 
 HOOK_MAX = 6000
 LESSONS_BLOCK_MAX = 1000
+GUARDRAILS_BLOCK_MAX = 900
+GUARDRAILS_HEADER = "Project guardrails (vault; follow them):"
+MIGRATION_LINE = "vault needs migration: /vault migrate"
 HOOK_AUDIENCE = ("implementer", "orchestrator")
 SKIP_AGENT_PREFIXES = ("vault-", "verify-")
 
@@ -27,7 +32,7 @@ def skip_agent(name) -> bool:
 
 
 VAULT_CONTEXT_MARKERS = ("## Project knowledge vault:", "Knowledge vault: none for this repository yet",
-                         "Lessons from past retros (follow them):")
+                         "Lessons from past retros (follow them):", GUARDRAILS_HEADER)
 
 
 def _resumed_transcript(path) -> tuple[str, str]:
@@ -102,6 +107,7 @@ def cmd_resolve(args) -> int:
 def cmd_version(args) -> int:
     if args.json:
         print(json.dumps({"name": "agent-vault", "version": core.VERSION, "contract": core.CONTRACT,
+                          "contracts": list(core.CONTRACTS), "schema": core.VAULT_SCHEMA,
                           "skill_dir": str(core.SKILL_DIR), "cli": str(core.SKILL_DIR / "bin" / "vault")}))
     else:
         print(f"agent-vault {core.VERSION} (contract {core.CONTRACT})")
@@ -147,6 +153,9 @@ def cmd_status(args) -> int:
     else:
         print("Synced:   never")
     print(f"Notes:    {total} ({by_type})")
+    schema = core.vault_schema(ctx)
+    hint = f" → {core.VAULT_SCHEMA}: run `/vault migrate`" if core.needs_migration(ctx) else ""
+    print(f"Schema:   {schema}{hint}")
     return 0
 
 
@@ -207,7 +216,7 @@ def _lessons_block(ctx: core.Ctx) -> str:
         lines.append("Harness lessons:")
         lines += [f"- {core.lesson_rule(n)} (×{core.lesson_occurrences(n)})" for n in harn]
     vault_cli = core.SKILL_DIR / "bin" / "vault"
-    tail = (f"Pending: {pending} harness/repo change proposal(s) await your approval → `{vault_cli} lessons --proposals`, then `{vault_cli} proposal accept|reject <note>`"
+    tail = (f"Pending: {pending} change proposal(s) await your approval → `{vault_cli} lessons --proposals`, then `{vault_cli} proposal accept|reject <note>`"
             if pending else "")
     out = []
     budget = LESSONS_BLOCK_MAX - (len(tail) + 1 if tail else 0)
@@ -220,17 +229,50 @@ def _lessons_block(ctx: core.Ctx) -> str:
     return "\n".join(out) if len(out) > 1 else ""
 
 
+def _guardrails_block(ctx: core.Ctx) -> str:
+    """Session-context digest: must-conventions, the SAD's C-/P- items and the 5 newest accepted ADRs, at most
+    GUARDRAILS_BLOCK_MAX chars; one migration line for a schema-1 vault; empty when there is nothing."""
+    if not ctx.initialized or core.is_pseudo(ctx.slug):
+        return ""
+    if core.needs_migration(ctx):
+        return MIGRATION_LINE
+    data = core.guardrails(ctx, None, budget=0)
+    data["conventions"] = [c for c in data["conventions"] if c["level"] == "must"]
+    data["adrs"] = data["adrs"][:5]
+    items = core.guardrail_bullets(data).splitlines()
+    if not items:
+        return ""
+    cli_path = shlex.quote(str((core.SKILL_DIR / "bin" / "vault").resolve()))
+    root = shlex.quote(str(ctx.repo_root or ctx.cwd))
+    tail = f"Guardrails CLI: {cli_path} guardrails --cwd {root} --paths <file> <file>... --format bullets"
+    if len(GUARDRAILS_HEADER) + 1 + len(tail) > GUARDRAILS_BLOCK_MAX:
+        tail = f"Guardrails CLI: {cli_path} guardrails --paths <file> <file>... --format bullets"
+    if len(GUARDRAILS_HEADER) + 1 + len(tail) > GUARDRAILS_BLOCK_MAX:
+        return ""
+    out = [GUARDRAILS_HEADER]
+    for ln in items:
+        if len("\n".join(out + [ln, tail])) > GUARDRAILS_BLOCK_MAX:
+            break
+        out.append(ln)
+    return "\n".join(out + [tail])
+
+
 def _context_text(ctx: core.Ctx) -> str:
-    try:
-        block = _lessons_block(ctx)
-    except Exception:  # noqa: BLE001 - lessons must never cost the session its vault context
-        block = ""
+    blocks = []
+    for build in (_lessons_block, _guardrails_block):
+        try:
+            block = build(ctx)
+        except Exception:  # noqa: BLE001 - guardrails and lessons must never cost the session its vault context
+            block = ""
+        if block:
+            blocks.append(block)
     base = _hook_text(ctx)
-    if not block:
+    tail = "\n\n".join(blocks)
+    if not tail:
         return base
     if not base:
-        return block
-    return base[: HOOK_MAX - len(block) - 2] + "\n\n" + block
+        return tail
+    return base[: HOOK_MAX - len(tail) - 2] + "\n\n" + tail
 
 
 def cmd_context(args) -> int:
@@ -581,7 +623,7 @@ def cmd_lessons(args) -> int:
         notes = (core.open_proposals(ctx) if own else []) + (core.open_proposals(h) if h else [])
         if args.format == "json":
             if notes:
-                _print_json([core.lesson_dict(n) for n in notes])
+                _print_json([{**core.lesson_dict(n), "type": n.type} for n in notes])
             return 0
         for n in notes:
             d = core.lesson_dict(n)
@@ -648,24 +690,40 @@ def cmd_covering(args) -> int:
 
 def _find_note(ctxs: list, ref: str):
     """(ctx, path) of the note `ref` names: a link (`[[x]]`, `x#Heading`), a vault- or project-relative path."""
-    r = ref.strip()
-    if r.startswith("[[") and r.endswith("]]"):
-        r = r[2:-2]
-    r = r.split("|", 1)[0].split("#", 1)[0].strip()
     for c in ctxs:
-        if not (c and c.matched and c.project_dir):
-            continue
-        p = Path(r).expanduser()
-        cands = [p] if p.is_absolute() else [c.vault / r, c.project_dir / r]
-        for cand in cands:
-            for f in (cand, cand.with_name(cand.name + ".md")):
-                if f.is_file():
-                    try:
-                        f.resolve().relative_to(c.project_dir.resolve())
-                    except ValueError:
-                        continue
-                    return c, f
+        if c and c.matched and c.project_dir:
+            f = core.find_note_path(c, ref)
+            if f:
+                return c, f
     raise SystemExit(f"vault: note not found: {ref}")
+
+
+def _accept(owner: core.Ctx, note: core.Note, text: str):
+    """New text of the proposal note, plus (target path, new target text) for a change proposal; None when the
+    target moved on since the proposal was written."""
+    kind = str(note.fm.get("proposal_kind") or "none")
+    text = fmlib.set_field(text, "proposal_status", "applied")
+    if kind == "rule-promotion":
+        text = fmlib.set_field(text, "status", "promoted")
+        text = fmlib.set_field(text, "promoted_to", str(note.fm.get("proposal_target") or ""))
+    elif kind in core.NOTE_PROPOSAL_KINDS:
+        want = "adr" if kind == "adr-new" else "convention"
+        if note.type != want:
+            raise SystemExit(f"vault: {kind} proposal {note.link} is not a {want} note")
+        text = fmlib.set_field(text, "status", "accepted" if kind == "adr-new" else "active")
+    elif kind in core.CHANGE_PROPOSAL_KINDS:
+        target = core.proposal_target_path(owner, note)
+        if target is None:
+            raise SystemExit(f"vault: proposal_target not found: {note.fm.get('proposal_target', '')}")
+        new_target = core.proposed_text(note.body)
+        if new_target is None:
+            raise SystemExit(f"vault: {note.link} has no '## Proposed note' fenced block")
+        if str(note.fm.get("base_hash") or "") != core.note_hash(target.read_text(encoding="utf-8")):
+            return None
+        if note.type == "proposal":
+            text = fmlib.set_field(text, "status", "applied")
+        return text, (target, new_target)
+    return text, None
 
 
 def cmd_proposal(args) -> int:
@@ -673,19 +731,27 @@ def cmd_proposal(args) -> int:
     owner, path = _find_note([ctx, core.harness_ctx(ctx)], args.note)
     with core.Lock(owner.vault):
         note = core.load_note(path, owner.vault, owner.project_dir)
-        if not note or note.type != "lesson":
-            raise SystemExit(f"vault: {args.note} is not a lesson note")
-        state = str(note.fm.get("proposal_status") or "none")
+        state = str(note.fm.get("proposal_status") or "none") if note else "none"
+        if not note or (note.type != "lesson" and state == "none" and not note.fm.get("proposal_kind")):
+            raise SystemExit(f"vault: {args.note} is not a proposal note")
         if state != "open":
             raise SystemExit(f"vault: {note.link} has no open proposal (proposal_status: {state})")
         text = path.read_text(encoding="utf-8")
+        change = None
         if args.action == "accept":
-            text = fmlib.set_field(text, "proposal_status", "applied")
-            if note.fm.get("proposal_kind") == "rule-promotion":
-                text = fmlib.set_field(text, "status", "promoted")
-                text = fmlib.set_field(text, "promoted_to", str(note.fm.get("proposal_target") or ""))
+            res = _accept(owner, note, text)
+            if res is None:
+                print(f"needs-rebase: {note.link} — {note.fm.get('proposal_target', '')} changed since the proposal "
+                      f"was written (base_hash {note.fm.get('base_hash', '')}); nothing written. Rebase it "
+                      f"(ops/proposal-rebase.md), show the diff to the user, then accept again.")
+                return core.PROPOSAL_NEEDS_REBASE
+            text, change = res
         else:
             text = fmlib.set_field(text, "proposal_status", "rejected")
+            if note.type == "proposal":
+                text = fmlib.set_field(text, "status", "rejected")
+        if change:
+            change[0].write_text(change[1], encoding="utf-8")
         path.write_text(text, encoding="utf-8")
     verb = "accepted" if args.action == "accept" else "rejected"
     commit_args = argparse.Namespace(message=f"proposal: {args.action} {note.link}", stamp=None, stamp_all=False,
@@ -694,6 +760,113 @@ def cmd_proposal(args) -> int:
         cmd_commit(commit_args, owner)
     print(f"proposal {verb}: {note.link}")
     return 0
+
+
+def cmd_hash(args) -> int:
+    ctx = _ctx(args)
+    _, path = _find_note([ctx, core.harness_ctx(ctx)], args.note)
+    print(core.note_hash(path.read_text(encoding="utf-8")))
+    return 0
+
+
+def cmd_guardrails(args) -> int:
+    ctx = _ctx(args)
+    if not ctx.initialized:
+        return 0
+    paths = [p for arg in args.paths or [] for p in arg.split(",") if p.strip()]
+    rels = [_repo_rel(ctx, p.strip()) for p in paths] if paths else None
+    data = core.guardrails(ctx, rels, max(0, args.budget))
+    if args.format == "json":
+        _print_json({"contract": core.CONTRACT, "schema": core.vault_schema(ctx), **data})
+        return 0
+    text = core.guardrail_bullets(data)
+    if text:
+        print(text)
+    return 0
+
+
+def cmd_mv(args) -> int:
+    ctx = _ctx(args)
+    _need_project(ctx)
+    _, src = _find_note([ctx], args.old)
+    with core.Lock(ctx.vault):
+        res = core.move_note(ctx, src, args.new, dry_run=args.dry_run)
+    if args.json:
+        _print_json(res)
+        return 0
+    verb = "would move" if args.dry_run else "moved"
+    print(f"vault: {verb} [[{res['from']}]] → [[{res['to']}]]; links rewritten in {len(res['rewritten'])} note(s)")
+    for r in res["rewritten"]:
+        print(f"  {r}")
+    if not args.dry_run:
+        print("Run `vault commit` to regenerate the hubs and commit.")
+    return 0
+
+
+def cmd_next_id(args) -> int:
+    ctx = _ctx(args)
+    _need_project(ctx)
+    n = core.next_number(ctx.project_dir)
+    prefix, folder = ("adr", core.FOLDERS["adr"]) if args.kind == "adr" else ("dec", core.FOLDERS["decision"])
+    name = f"-{core.slugify(args.name)}" if args.name else ""
+    print(f"{folder}/{prefix}-{n:04d}{name}.md")
+    return 0
+
+
+# --------------------------------------------------------------------------- migrate
+
+
+def _print_migration(res: dict) -> None:
+    status = res["status"]
+    if status == "up-to-date":
+        print(f"vault: {res['message']}")
+        return
+    head = {"planned": "migration planned", "resuming": "migration in progress (resuming)",
+            "dry-run": "dry run, nothing written", "migrated": "migrated",
+            "lint-failed": "lint errors; fix them and re-run `vault migrate --apply`"}[status]
+    print(f"vault: {res['slug']} schema {res['from']} → {res['to']}: {head}")
+    for c in res.get("changes", []):
+        print(f"  {c}")
+    for s in res.get("steps", []):
+        print(f"  [{'x' if s['done'] else ' '}] {s['name']} ({s['phase']}): {s['description']}")
+    if res.get("decisions") is not None:
+        print(f"Decisions to classify: {len(res['decisions'])}")
+        for d in res["decisions"]:
+            print(f"  {d['path']} — {d['title']}: {d['summary']}")
+    for i in res.get("lint", []):
+        print(f"  ERROR {i['note']}: {i['msg']}")
+    if res.get("commit"):
+        print(res["commit"])
+    if res.get("checkpoint"):
+        print(f"Checkpoint: {res['checkpoint']}")
+    if res.get("rollback"):
+        print(f"Rollback:   {res['rollback']}")
+
+
+def cmd_migrate(args) -> int:
+    ctx = _ctx(args)
+    _need_project(ctx)
+    try:
+        with core.Lock(ctx.vault):
+            if args.plan:
+                res = migrate.plan(ctx, dry_run=args.dry_run)
+            else:
+                decisions = migrate.load_decisions(Path(args.apply).expanduser())
+                res = migrate.apply(ctx, decisions, dry_run=args.dry_run)
+    except migrate.MigrationError as e:
+        raise SystemExit(f"vault: {e}") from None
+    rc = 1 if res["status"] == "lint-failed" else 0
+    if res["status"] == "migrated":
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cmd_commit(argparse.Namespace(message=f"migrate schema {res['from']}→{res['to']}", stamp=None,
+                                               stamp_all=False, synced=False), ctx)
+        res["commit"] = buf.getvalue().strip()
+    if args.format == "json":
+        _print_json(res)
+    else:
+        _print_migration(res)
+    return rc
 
 
 # --------------------------------------------------------------------------- tree
@@ -808,7 +981,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("commit", parents=[common], help="stamp, regenerate hubs, log and git-commit")
     s.add_argument("-m", "--message", required=True)
-    s.add_argument("--stamp", nargs="+", metavar="NOTE", help="mark notes verified at the target commit")
+    s.add_argument("--stamp", nargs="+", action="extend", metavar="NOTE", help="mark notes verified at the target commit")
     s.add_argument("--stamp-all", action="store_true", help="stamp every note that has code_refs")
     s.add_argument("--synced", action="store_true", help="record the target commit as last_synced")
     s.set_defaults(fn=cmd_commit)
@@ -827,10 +1000,47 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int, default=8)
     s.set_defaults(fn=cmd_covering)
 
-    s = sub.add_parser("proposal", parents=[common], help="accept or reject a lesson's open proposal")
+    s = sub.add_parser("proposal", parents=[common], help="accept or reject a note's open proposal "
+                       f"(exit {core.PROPOSAL_NEEDS_REBASE} + 'needs-rebase' when the target changed)")
     s.add_argument("action", choices=["accept", "reject"])
-    s.add_argument("note", help="lesson note: link or path")
+    s.add_argument("note", help="proposal note: link or path")
     s.set_defaults(fn=cmd_proposal)
+
+    s = sub.add_parser("hash", parents=[common], help="content hash of a note (base_hash of change proposals)")
+    s.add_argument("note", help="note: link or path")
+    s.set_defaults(fn=cmd_hash)
+
+    s = sub.add_parser("guardrails", parents=[common], help="conventions, SAD constraints/principles and accepted "
+                       "ADRs that apply to the paths")
+    s.add_argument("--paths", nargs="*", action="extend", metavar="PATH",
+                   help="repo paths, space- or comma-separated, repeatable; omit for every guardrail")
+    s.add_argument("--format", choices=["bullets", "json"], default="bullets")
+    s.add_argument("--budget", type=int, default=core.GUARDRAILS_BUDGET,
+                   help=f"max chars of bullets (default {core.GUARDRAILS_BUDGET}; 0 = unlimited)")
+    s.set_defaults(fn=cmd_guardrails)
+
+    s = sub.add_parser("mv", parents=[common], help="move a note and rewrite every wikilink to it")
+    s.add_argument("old", help="note: link or path")
+    s.add_argument("new", help="new project-relative path, e.g. architecture/adr/adr-0003-x.md")
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_mv)
+
+    s = sub.add_parser("next-id", parents=[common], help="path of the next numbered ADR or decision")
+    s.add_argument("kind", choices=["adr", "decision"])
+    s.add_argument("--name", help="kebab-case name to append")
+    s.set_defaults(fn=cmd_next_id)
+
+    s = sub.add_parser("migrate", parents=[common], help=f"migrate the vault to schema {core.VAULT_SCHEMA} "
+                       "(--plan, then --apply <decisions.json>)")
+    mode = s.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--plan", action="store_true", help="check the tree is clean, record a checkpoint, create the "
+                      "new folders and hubs, list the decisions to classify")
+    mode.add_argument("--apply", metavar="DECISIONS_JSON", help="apply the user's confirmed decisions, lint, set the "
+                      "schema and commit")
+    s.add_argument("--dry-run", action="store_true", help="print the changes without writing")
+    s.add_argument("--format", choices=["text", "json"], default="text")
+    s.set_defaults(fn=cmd_migrate)
 
     s = sub.add_parser("graph", parents=[common], help="interactive HTML graph of the project's notes")
     s.add_argument("--out", help="output file (default: <work_dir>/graph.html)")

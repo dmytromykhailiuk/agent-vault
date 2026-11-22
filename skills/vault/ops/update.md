@@ -27,6 +27,10 @@ merged, not the current task branch.
    and link them in. Ignore trivial churn.
 7. **Ripple up.** If features appeared, disappeared or changed meaning, update `features/*`, the core-feature list in
    `index.md`, and `glossary.md`.
+   **Guardrail notes** (`conventions/`, `architecture/`, `architecture/adr/`) are not rewritten here. When the code
+   now contradicts one, or a new structural choice or rule shows up, write a proposal (`convention-change`,
+   `sad-change`, `adr-new`, `convention-new` with `level: should`; see `reference/schema.md` "Proposals") and list it
+   in the report. Fixing a broken `code_refs`/`scope` path after a rename is fine without a proposal.
 8. `vault lint`. Fix the errors in the notes you touched.
 9. Commit:
    `vault commit -m "update <since12>..<target12>" --stamp <every note you checked> --synced`.

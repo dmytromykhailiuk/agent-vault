@@ -14,6 +14,9 @@ When the vault had a gap, fill it.
    - `vault search "<terms>"` (vary the terms between runs; add `--type guide|problem|decision|feature|module` to narrow)
    - `vault search --code <repo-relative-path>` when the question is about specific files
    - `vault list --type <type>` when you need the whole map of one kind
+   - `vault guardrails --paths <file> <file>…` when the question is "what rules apply here / may I do X": it lists the
+     conventions, SAD constraints and principles and accepted ADRs for those files. `--type adr` finds architectural
+     decisions, `--type decision` the rest.
    - Identifier queries such as `lockTtlMs` or `getVehicleInfo` work too. When notes are thin, the output adds
      `Code matches … → <notes>` (the files at the target that contain it, and which notes cover them). A line
      `→ no note covers this file` is a vault gap: read that file, answer, and file it back in step 6.
@@ -21,7 +24,8 @@ When the vault had a gap, fill it.
 5. **Verify** when a note you rely on is flagged `STALE` or `UNVERIFIED`, or when the notes don't fully answer: do
    targeted reads or greps in the code at `code_root`. If it is `null`, run `vault tree` and read under that path.
    Don't explore broadly; answer the question.
-6. **File it back** if code taught you something the vault lacked, or if a note was wrong. Follow
+6. **File it back** if code taught you something the vault lacked, or if a note was wrong (a wrong convention, SAD
+   section or ADR gets a proposal, never a direct edit). Follow
    `<skill_dir>/ops/remember.md` steps 2–5: update the existing note rather than creating a new one, fix
    the wrong claims, and link it. Then:
    `vault commit -m "search: <topic>" --stamp <notes you fully re-checked against code>`.

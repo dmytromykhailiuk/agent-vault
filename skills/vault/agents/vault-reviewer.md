@@ -30,11 +30,22 @@ dir. When the task gives `Vault dir setting:`, add `--vault-dir '<that setting>'
 - **Read-only, everywhere.** Never use Edit or Write; never create, move or delete files; never run `vault commit`,
   `vault proposal`, `vault setup`, `vault resolve --create` or `vault tree --remove`.
 - Allowed CLI commands: `resolve`, `status`, `search`, `list`, `affected`, `lint`, `coverage`, `lessons`,
-  `covering`, `tree` (to read code at the target when `code_root` is `null`).
+  `covering`, `guardrails`, `hash`, `tree` (to read code at the target when `code_root` is `null`).
 - Git in the project repo: only `git log`, `git show`, `git diff`, `git ls-files`, `git grep`, `git rev-parse`,
   `git status`, run in your cwd without `-C`.
 - Read code at the `code_root` that `vault resolve` prints, or under the path `vault tree` prints.
 - Don't spawn sub-agents.
+
+## Guardrail notes
+Besides the checks in `ops/qa.md`, audit the guardrail notes against the code:
+- **Conventions**: does each `scope` glob cover the code the rule is about (`vault guardrails --paths <file>` for a
+  file it should and one it shouldn't cover)? Does the code actually follow `must` rules (sample 2–3 files; a
+  violated must-rule is a finding, either for the code or for the note)?
+- **C4 / SAD**: do the Mermaid C4 elements and relations match the real modules and their imports, and do element
+  aliases match module note names? Are the `C-n` / `P-n` items still true?
+- **ADR vs decision**: is each ADR in `architecture/adr/` really structural (boundaries, dependencies,
+  integrations, quality attributes) and each note in `decisions/` not? Name misclassified notes.
+Report these under a `Guardrails` heading; changes are proposals for the keeper, never edits.
 
 ## Quality bar
 - Find the true answer in code before you judge a note. Every verdict cites evidence: `path` + `Symbol`, or the

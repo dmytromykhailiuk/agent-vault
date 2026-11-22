@@ -1,7 +1,9 @@
 # agent-vault
 
 A per-project knowledge vault for coding agents (Claude Code and Codex). It keeps Obsidian-style markdown notes about
-each repository: the overview, features, how-to guides, known problems, decisions and module internals. Every note
+each repository: the overview, features, how-to guides, known problems, decisions and module internals, plus the
+project's guardrails: conventions (must/should), an arc42 architecture description with Mermaid C4 diagrams and
+architectural decision records (ADRs). Every note
 cites code (`path` + `Symbol`), and the vault tracks which notes went stale as the code moved on.
 
 The main session never reads the vault itself. It dispatches each operation to a separate agent, so the session
@@ -88,8 +90,12 @@ run twice.
 | `vault update` | Brings the notes in line with `origin/<default>`: stale notes, renames, uncovered changes. |
 | `vault lint` | Fixes broken links, missing fields, wrong code refs, orphans. |
 | `vault review [focus]` | The reviewer audits claims against code and search quality; read-only. |
-| `vault init [--dir …] [--save …] [--depth full\|lite]` | Generates the vault for a repo: planner, parallel workers, synthesizer. Expensive; only on request. |
+| `vault init [--dir …] [--save …] [--depth full\|lite]` | Generates the vault for a repo: planner, parallel workers, guardrail candidates, your confirmation, synthesizer. Expensive; only on request. |
+| `vault migrate` | Upgrades an existing vault to schema 2 (see "Migrating a schema-1 vault"). Only on request. |
 | `vault graph [--no-stale] [--out <file>] [--no-open]` | Writes an interactive graph of the project's notes to `<work_dir>/graph.html` and opens it: notes as nodes, wikilinks as edges, code files and lessons/retros behind toggles, stale/unverified notes marked, and a click shows the rendered note with its links, backlinks and code refs. The page loads cytoscape.js, marked and DOMPurify from cdnjs. |
+| `vault guardrails [paths…]` | Lists the conventions, SAD constraints (C-n) and principles (P-n) and accepted ADRs that apply to the paths (`--format json`, `--budget N`). The session context carries a short digest ending in `Guardrails CLI: <absolute path>/skills/vault/bin/vault guardrails --cwd <resolved repo root> --paths <file> <file>... --format bullets`, the last line of the session context. `--paths` takes space- or comma-separated paths and can repeat. |
+| `vault proposal [accept\|reject <note>]` | Shows or decides proposals: new ADRs and conventions, changes to conventions and SAD sections, lesson promotions. A change proposal whose target moved on exits with `needs-rebase` (code 3); the keeper rebases it and you see the diff before accepting. |
+| `vault mv <old> <new>` | Moves a note and rewrites every wikilink to it (CLI only; the old path becomes an alias). |
 | `vault status` / `vault doctor` | Vault state / installation state. |
 
 ## Where the vault lives
@@ -112,11 +118,34 @@ is a **shared** vault: one git repo and one Obsidian vault for every project. An
 <vault_dir>/
   index.md  glossary.md  log.md  _meta.json
   features/  guides/  problems/  decisions/  modules/
+  conventions/  architecture/  architecture/adr/  proposals/
   lessons/  retros/          # used by the optional agent-verify-loop retro
 ```
 
 The full note format is in [`skills/vault/reference/schema.md`](skills/vault/reference/schema.md); each operation's
 procedure is in [`skills/vault/ops/`](skills/vault/ops).
+
+## Migrating a schema-1 vault
+
+Vaults created before 0.3.0 have schema 1: no `conventions/`, `architecture/` or `architecture/adr/`, and ADRs mixed
+into `decisions/`. The session context, `vault status` and `vault lint` then say `vault needs migration: /vault
+migrate`. Nothing migrates on its own; when you are ready:
+
+1. Commit (or discard) any uncommitted vault changes; the migration refuses a dirty vault.
+2. Run `/vault migrate`. The CLI records the vault's HEAD as a checkpoint and prints the rollback command, then
+   creates the new folders and hubs.
+3. A keeper classifies every existing decision as ADR or plain decision and scans the repo for conventions and the
+   arc42 sections. You confirm: one question with the confident items (accept all / with edits / one by one), then
+   separate questions for the doubtful ones and for the arc42 goals and constraints.
+4. A keeper writes the confirmed conventions and SAD notes and runs `vault migrate --apply`: ADRs move to
+   `architecture/adr/` with their number and every link rewritten (the old path stays an alias), the remaining
+   decisions get a `kind`, lint must be clean, `schema` becomes 2 and the vault is committed as
+   `migrate schema 1→2`.
+
+A failed run resumes where it stopped (`_meta.json` `migration`); a second run on a migrated vault does nothing.
+CLI only: `vault migrate --plan [--dry-run] [--format json]` and `vault migrate --apply <decisions.json> [--dry-run]`
+(formats in [`reference/schema.md`](skills/vault/reference/schema.md) § "Schema version"). To roll back, run the
+printed `git … restore --source=<checkpoint> …` command, or `git revert` the migration commit.
 
 ## Migrating from a hand-installed `~/.claude/skills/vault`
 
@@ -126,8 +155,9 @@ afterwards: it warns when two hooks inject the context.
 
 ## Integration with agent-verify-loop
 
-agent-verify-loop (`vloop`) is optional. Both CLIs answer `version --json` with a `contract` number (currently 1) so
-each can check the other.
+agent-verify-loop (`vloop`) is optional. Both CLIs answer `version --json` with a `contract` number so each can check
+the other. This CLI serves contracts 1 and 2: `version --json` prints `"contract": 2`, `"contracts": [1, 2]` and the
+vault `"schema"` (2); contract-1 fields are unchanged.
 
 - **Discovery.** `vault resolve` and `vault doctor` report `vloop`: env `VLOOP_CLI`, then `vloop` on `PATH`, then the
   Claude plugin cache, the Codex plugin cache, and the skill dirs (`~/.claude/skills/verify-loop`,
@@ -137,6 +167,13 @@ each can check the other.
 - **What vloop uses.** `vault resolve`, `vault lessons --format json`, `vault covering --format json`,
   `vault proposal`, and retros through the `vault-keeper` agent plus `ops/retro.md`. The retro task file carries
   `vloop:`, `vault_cli:` and `ops:` lines.
+- **Contract 2.** `vault guardrails --paths <changed files> --format json --budget N` →
+  `{"contract":2,"schema":N,"conventions":[…],"architecture":[…],"adrs":[…]}`, items
+  `{link,title,kind,level,rule,scope_match,status}`; nothing printed for a project without a vault. After a pass,
+  vloop dispatches the keeper's `sync` op (`skills/vault/ops/sync.md` defines the task-file fields): facts are updated
+  and committed, ADR/convention/SAD changes come back as proposals. `vault proposal accept` exits 3 with
+  `needs-rebase` when a change proposal's target changed. A schema-1 vault prints `vault needs migration: /vault
+  migrate` in the session context; vloop should skip guardrails-dependent steps until `schema` is 2.
 - **When one is absent.** Without vloop the vault works unchanged (retro ledger baselines are skipped). Without the
   vault, vloop skips lessons and retro notes.
 

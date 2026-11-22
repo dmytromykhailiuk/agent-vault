@@ -1,6 +1,41 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-11-22
+
+- Vault schema 2 (`_meta.json` `schema: 2` for new vaults): `conventions/` (one rule per note, `level` must/should,
+  `rule`, `scope` globs), `architecture/` (arc42 sections with Mermaid C4 diagrams, `C-n` constraints and `P-n`
+  principles), `architecture/adr/` for architectural ADRs while `decisions/` keeps the rest (`dec-NNNN`), and
+  `proposals/`. Note types follow the deepest folder; hubs sort conventions must-first, the SAD in arc42 order and
+  ADRs by number.
+- `vault guardrails [--paths …] [--format bullets|json] [--budget N]` (integration contract 2) and a ≤ 900-char
+  guardrails digest in the session context. `vault version --json` adds `contracts: [1, 2]` and `schema`.
+- Proposals for any note: `adr-new`, `convention-new`, `convention-change`, `sad-change`. A change proposal carries
+  `base_hash`; `vault proposal accept` writes nothing and exits 3 with `needs-rebase` when the target changed, and
+  the new `proposal-rebase` op carries the change over and returns a diff for the user. New `vault hash`.
+- `vault mv <old> <new>` moves a note and rewrites every wikilink to it; `vault next-id adr|decision`.
+- Lint: convention `level`/`rule` errors, scope, C4 and `C-/P-` item warnings, duplicate arc42 sections,
+  architectural-looking decisions, proposal checks, and an error for schema-1 vaults (`/vault migrate`).
+- New `sync` op for agent-verify-loop: after a pass the keeper updates fact notes and proposes ADR, convention and
+  SAD changes; the keeper never sets `must`, `active` or `accepted` itself.
+- Interactive `init`: workers report `Conventions observed`, `Architecture observed` and ADR-vs-decision
+  classification with evidence, proposed level and confidence; the new `init-candidates` phase (opus) merges them
+  into `candidates.json` with an arc42 draft; the main session confirms them with the user (`init-confirm`: one
+  question for the confident list, separate questions for doubtful items and arc42 goals/constraints) into
+  `decisions.json`; `init-synth` writes only what was confirmed (conventions `active` / `init-confirmed`, `must`
+  only when confirmed; unanswered → `proposed`), ADRs to `architecture/adr/`, other decisions to `decisions/`, and
+  the 9 arc42 notes with Mermaid C4.
+- `vault migrate --plan | --apply <decisions.json> [--dry-run] [--format json]` and the `/vault migrate` op for
+  schema-1 vaults: refuses a dirty vault, records a git checkpoint, creates the new folders and hubs, moves the
+  decisions the user classified as ADR to `architecture/adr/` (number kept, links rewritten, old path as alias),
+  sets `kind` on the rest, gates on lint, sets `schema: 2` and commits `migrate schema 1→2`. Steps are ordered per
+  schema (`MIGRATIONS` in `migrate.py`), idempotent and resumable (`_meta.json` `migration`); a schema-2 vault is a
+  no-op. The keeper writes the confirmed conventions and SAD notes before the apply.
+- `vault guardrails --paths` accepts space- or comma-separated paths and repeats; the session digest shows
+  `--paths <file> <file>...`.
+- `vault commit --stamp a --stamp b` stamps every note (only the last one was stamped).
+- Lint: a `code_ref` that exists only in the repo working tree is a warning, not an error, so the post-pass `sync`
+  lint works before the change is committed; links to the hub of an existing folder resolve before `vault commit`
+  writes it (init-synth lints before the commit).
 
 ## 0.2.0 — 2026-11-15
 

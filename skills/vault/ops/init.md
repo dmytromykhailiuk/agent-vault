@@ -30,12 +30,20 @@ Arguments:
 
    Run at most **5 at a time**, as parallel sub-agents launched in one message. Start the next batch as agents
    finish. A worker whose unit is already done replies "already done"; that's fine. Collect only their short final messages, and retry a failed unit once.
-5. **Synthesis.** When all workers are done, launch the agent in the background with:
+5. **Guardrail candidates** (skip for `lite`). When all workers are done, launch the agent in the background with:
+   - operation `init-candidates`, model **opus**, label `vault-init-candidates`;
+   - inputs: repo root, `Source: init`.
+
+   It writes `<work_dir>/candidates.json` and replies with counts.
+6. **Confirm** (skip for `lite`): follow `<skill_dir>/ops/init-confirm.md` yourself. It asks the user one question
+   for the high-confidence list and separate questions for the doubtful items and the arc42 goals/constraints, and
+   writes `<work_dir>/decisions.json`.
+7. **Synthesis.** Launch the agent in the background with:
    - operation `init-synth`, model **opus**, label `vault-init-synth`;
    - inputs: repo root, depth.
-6. **Report** to the user, from the synth's final message:
-   - what was created;
-   - inferred decisions and open problems to review;
+8. **Report** to the user, from the synth's final message:
+   - what was created, including the conventions (MUST/SHOULD), ADRs and SAD sections;
+   - inferred decisions, conventions left `proposed` and open problems to review;
    - remaining lint warnings.
 
    Then, by `vault_git` from `vault resolve`:

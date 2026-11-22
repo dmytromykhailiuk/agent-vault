@@ -45,6 +45,8 @@ the plan and recon files; don't write notes.
    - **Architecture**: entry points, layers, config system;
    - **Domain terms** seen;
    - **Commands**: point to `CLAUDE.md` / `AGENTS.md`, don't copy them;
+   - **Rule sources** for the guardrail candidates: the `CLAUDE.md` / `AGENTS.md` / docs lines that state rules
+     (file:line), linter/formatter/tsconfig configs and architecture tests found (paths only);
    - **Notable history**: migrations, decisions from commit messages;
    - **Facts from auto-memory**;
    - **Open questions**.
